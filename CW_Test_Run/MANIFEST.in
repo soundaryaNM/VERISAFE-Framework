@@ -1,0 +1,9 @@
+include README.md
+include LICENSE
+include requirements.txt
+recursive-include tests *.py
+global-exclude *.pyc
+global-exclude __pycache__
+prune build
+prune dist
+prune *.egg-info

@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "mcdc_gaps",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": "mcdc_gaps-1.0" },
+    "mcdc_entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "function_id": { "type": "string" },
+          "expression": { "type": "string" },
+          "atomic_conditions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "source_location": {
+            "type": "object",
+            "properties": {
+              "file": { "type": "string" },
+              "line": { "type": "integer", "minimum": 1 }
+            },
+            "required": ["file", "line"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["function_id", "expression", "atomic_conditions", "source_location"],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    }
+  },
+  "required": ["schema_version", "mcdc_entries"],
+  "additionalProperties": false
+}

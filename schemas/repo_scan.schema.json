@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "repo_scan",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": "repo_scan-1.0" },
+    "repo_root": { "type": "string" },
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "file": { "type": "string" },
+          "signature": { "type": "string" },
+          "source_hash": { "type": "string" }
+        },
+        "required": ["id", "name", "file", "signature", "source_hash"],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "call_graph": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "caller_id": { "type": "string" },
+          "callee_id": { "type": "string" }
+        },
+        "required": ["caller_id", "callee_id"],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "call_depth": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "hardware_flags": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    }
+  },
+  "required": ["schema_version", "repo_root", "functions", "call_graph", "call_depth", "hardware_flags"],
+  "additionalProperties": false
+}

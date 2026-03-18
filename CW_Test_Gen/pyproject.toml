@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-c-test-generator"
+version = "0.1.0"
+description = "AI-powered C/C++ unit test generator"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.25.0",
+    "openai>=1.0.0",
+    "google-genai",
+    "ai-c-test-analyzer>=0.1.0",
+]
+
+# The entry points
+[project.scripts]
+ai-c-testgen = "ai_c_test_generator.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=22.0",
+    "isort>=5.0",
+]
+
+[tool.setuptools]
+zip-safe = false
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ai_c_test_generator*"]
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"

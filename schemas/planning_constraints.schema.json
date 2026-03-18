@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "planning_constraints",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": "planning_constraints-1.0" },
+    "policy_id": { "type": "string" },
+    "policy_version": { "type": "string" },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "must_generate_test_types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["BASE", "BOUNDARY", "ERROR_PATH", "MCDC"]
+          },
+          "minItems": 0
+        },
+        "mcdc_required": { "type": "boolean" },
+        "approval_required": { "type": "boolean" },
+        "coverage_targets": {
+          "type": "object",
+          "properties": {
+            "branch": { "type": "integer", "minimum": 0, "maximum": 100 },
+            "statement": { "type": "integer", "minimum": 0, "maximum": 100 }
+          },
+          "required": ["branch", "statement"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["must_generate_test_types", "mcdc_required", "approval_required", "coverage_targets"],
+      "additionalProperties": false
+    },
+    "_provenance": {
+      "type": "object",
+      "properties": {
+        "policy_source_hash": { "type": "string" },
+        "derived_at": { "type": "string", "format": "date-time" },
+        "derived_by": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["schema_version", "policy_id", "policy_version", "constraints"],
+  "additionalProperties": false
+}

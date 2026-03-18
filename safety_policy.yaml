@@ -1,0 +1,84 @@
+# Safety policy configuration.
+# This configures enforcement rules aligned with SIL expectations.
+# It does NOT claim the tool is certified.
+
+# Optional metadata for humans/tools. (Ignored by current policy loaders unless explicitly used.)
+safety:
+  standard: EN50128
+  level: SIL-3
+
+QM:
+  base_tests: true
+  boundary_tests: false
+  error_path_tests: false
+  mcdc_analysis: false
+  mcdc_generation: false
+  approval_required: false
+  coverage_target:
+    statement: 70
+    branch: 50
+
+# Deterministic guidance mapping (requested):
+# - SIL0: early dev, but still enforces human review/approval before build/run
+SIL0:
+  base_tests: true
+  boundary_tests: false
+  error_path_tests: false
+  mcdc_analysis: false
+  mcdc_generation: false
+  approval_required: true
+  coverage_target:
+    statement: 70
+    branch: 50
+
+SIL1:
+  base_tests: true
+  boundary_tests: true
+  error_path_tests: false
+  mcdc_analysis: false
+  mcdc_generation: false
+  approval_required: true
+  coverage_target:
+    statement: 80
+    branch: 60
+
+SIL2:
+  base_tests: true
+  boundary_tests: false
+  error_path_tests: false
+  mcdc_analysis: false
+  mcdc_generation: false
+  approval_required: true
+  coverage_target:
+    statement: 90
+    branch: 80
+    decision: 80
+
+SIL3:
+  base_tests: true
+  boundary_tests: true
+  error_path_tests: true
+  mcdc_analysis: mandatory
+  mcdc_generation: mandatory
+  approval_required: true
+  coverage_target:
+    statement: 100
+    branch: 100
+    mcdc: guided
+
+# - SIL-4: analysis-only + human-driven tests
+SIL4:
+  base_tests: false
+  boundary_tests: false
+  error_path_tests: false
+  mcdc_analysis: mandatory
+  mcdc_generation: false
+  approval_required: true
+  coverage_target:
+    statement: 100
+    branch: 100
+    mcdc: guided
+
+  # SIL4 intent (demo-facing): generate suggestions, require human-designed tests.
+  suggestions_only: true
+  execute_only_approved: true

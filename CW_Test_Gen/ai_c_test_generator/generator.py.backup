@@ -1,0 +1,501 @@
+"""
+AI Test Generator - Core test generation logic
+"""
+
+import os
+import re
+import time
+from pathlib import Path
+from typing import Dict, List
+
+import google.generativeai as genai
+
+from .analyzer import DependencyAnalyzer
+
+
+class SmartTestGenerator:
+    """AI-powered test generator using Google Gemini with embedded systems support"""
+
+    def __init__(self, api_key: str, repo_path: str = '.', redact_sensitive: bool = False):
+        genai.configure(api_key=api_key)
+        self.repo_path = repo_path
+        self.redact_sensitive = redact_sensitive
+
+        # Use modern API (v0.8.0+) with gemini-2.5-flash as primary model
+        self.models_to_try = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+        self.current_model_name = None
+        self.model = None
+
+        self._initialize_model()
+
+        # Enhanced embedded-specific prompts
+        self.embedded_prompts = {
+            'hardware_registers': """
+            Generate comprehensive tests for hardware register access:
+            - Test volatile register reads/writes
+            - Verify memory-mapped I/O operations
+            - Test register bit manipulation
+            - Check boundary conditions and invalid values
+            - Test atomic operations where applicable
+            """,
+
+            'bit_fields': """
+            Generate tests for bit field operations:
+            - Test individual bit field access
+            - Verify bit field packing/unpacking
+            - Test bit field boundary conditions
+            - Check endianness handling
+            - Test bit field arithmetic operations
+            """,
+
+            'state_machines': """
+            Generate tests for state machine implementations:
+            - Test valid state transitions
+            - Verify invalid transition handling
+            - Test state entry/exit actions
+            - Check state machine initialization
+            - Test concurrent state access
+            """,
+
+            'safety_critical': """
+            Generate tests for safety-critical functions:
+            - Test TMR (Triple Modular Redundancy) voting
+            - Verify watchdog timer functionality
+            - Test fault detection and recovery
+            - Check safety margins and thresholds
+            - Test fail-safe behaviors
+            """,
+
+            'interrupt_handlers': """
+            Generate tests for interrupt service routines:
+            - Test ISR entry/exit conditions
+            - Verify interrupt priority handling
+            - Test nested interrupt scenarios
+            - Check interrupt latency requirements
+            - Test interrupt masking/unmasking
+            """,
+
+            'dma_operations': """
+            Generate tests for DMA transfer operations:
+            - Test DMA channel configuration
+            - Verify data transfer integrity
+            - Check DMA completion callbacks
+            - Test error handling and recovery
+            - Verify memory alignment requirements
+            """,
+
+            'communication_protocols': """
+            Generate tests for communication protocol implementations:
+            - Test protocol state machines
+            - Verify packet parsing and validation
+            - Check error detection and correction
+            - Test timeout and retry mechanisms
+            - Verify protocol compliance
+            """
+        }
+
+        # Enhanced embedded-specific prompts
+        self.embedded_prompts = {
+            'hardware_registers': """
+            Generate comprehensive tests for hardware register access:
+            - Test volatile register reads/writes
+            - Verify memory-mapped I/O operations
+            - Test register bit manipulation
+            - Check boundary conditions and invalid values
+            - Test atomic operations where applicable
+            """,
+
+            'bit_fields': """
+            Generate tests for bit field operations:
+            - Test individual bit field access
+            - Verify bit field packing/unpacking
+            - Test bit field boundary conditions
+            - Check endianness handling
+            - Test bit field arithmetic operations
+            """,
+
+            'state_machines': """
+            Generate tests for state machine implementations:
+            - Test all valid state transitions
+            - Verify invalid transition handling
+            - Test state machine initialization
+            - Check state persistence across operations
+            - Test concurrent state access (if applicable)
+            """,
+
+            'safety_critical': """
+            Generate tests for safety-critical functions:
+            - Test TMR (Triple Modular Redundancy) voting
+            - Verify watchdog timer operations
+            - Test fault detection and recovery
+            - Check power supply redundancy
+            - Test error handling and logging
+            """,
+
+            'interrupt_handlers': """
+            Generate tests for interrupt service routines:
+            - Test interrupt context switching
+            - Verify interrupt priority handling
+            - Test nested interrupt scenarios
+            - Check interrupt flag management
+            - Test interrupt latency requirements
+            """,
+
+            'dma_operations': """
+            Generate tests for DMA transfer operations:
+            - Test DMA channel configuration
+            - Verify data transfer integrity
+            - Test DMA interrupt handling
+            - Check DMA buffer management
+            - Test error recovery scenarios
+            """
+        }
+
+    def generate_embedded_tests(self, source_code: str, function_name: str,
+                               function_info: Dict) -> str:
+        """
+        Generate comprehensive tests for embedded C functions with hardware-specific considerations.
+
+        Args:
+            source_code: The complete source code
+            function_name: Name of the function to test
+            function_info: Function metadata from analyzer
+
+        Returns:
+            Generated Unity test code
+        """
+
+        # Analyze function for embedded patterns
+        embedded_patterns = self._analyze_embedded_patterns(source_code, function_name)
+
+        # Build enhanced prompt based on detected patterns
+        prompt = self._build_embedded_prompt(function_name, function_info, embedded_patterns)
+
+        # Generate tests using AI with embedded context
+        try:
+            response = self.model.generate_content(prompt)
+            generated_tests = response.text
+
+            # Post-process for embedded-specific patterns
+            processed_tests = self._post_process_embedded_tests(generated_tests, embedded_patterns)
+
+            # Validate and enhance tests
+            validated_tests = self.validator.validate_and_enhance_tests(
+                processed_tests, source_code, function_name, embedded_patterns
+            )
+
+            return validated_tests
+
+        except Exception as e:
+            return self._generate_fallback_tests(function_name, function_info, embedded_patterns)
+
+    def _analyze_embedded_patterns(self, source_code: str, function_name: str) -> Dict:
+        """
+        Analyze source code for embedded-specific patterns and features.
+
+        Returns:
+            Dictionary of detected embedded patterns
+        """
+        patterns = {
+            'volatile_registers': False,
+            'bit_fields': False,
+            'state_machine': False,
+            'safety_critical': False,
+            'interrupts': False,
+            'dma': False,
+            'memory_mapped': False,
+            'peripherals': [],
+            'register_access': []
+        }
+
+        # Check for volatile register access
+        if re.search(r'volatile\s+uint32_t\s+\w+.*;', source_code):
+            patterns['volatile_registers'] = True
+            patterns['register_access'].extend(re.findall(r'volatile\s+uint32_t\s+(\w+)', source_code))
+
+        # Check for bit field structures
+        if re.search(r'struct\s+\w+\s*\{[^}]*:\s*\d+[^}]*\}', source_code):
+            patterns['bit_fields'] = True
+
+        # Check for state machine patterns
+        if re.search(r'state|STATE|status|STATUS', source_code, re.IGNORECASE):
+            if re.search(r'switch\s*\(\w*state\w*\)', source_code, re.IGNORECASE):
+                patterns['state_machine'] = True
+
+        # Check for safety-critical patterns
+        if re.search(r'watchdog|WATCHDOG|tmr|TMR|voting|VOTING', source_code, re.IGNORECASE):
+            patterns['safety_critical'] = True
+
+        # Check for interrupt patterns
+        if re.search(r'interrupt|INTERRUPT|ISR|isr', source_code, re.IGNORECASE):
+            patterns['interrupts'] = True
+
+        # Check for DMA patterns
+        if re.search(r'dma|DMA|transfer|TRANSFER', source_code, re.IGNORECASE):
+            patterns['dma'] = True
+
+        # Check for memory-mapped I/O
+        if re.search(r'0x[0-9A-Fa-f]+\s*[\+\-]*', source_code):
+            patterns['memory_mapped'] = True
+
+        # Identify peripheral types
+        peripheral_patterns = {
+            'GPIO': r'GPIO|gpio',
+            'UART': r'UART|uart|SERIAL|serial',
+            'SPI': r'SPI|spi',
+            'I2C': r'I2C|i2c',
+            'ADC': r'ADC|adc',
+            'DAC': r'DAC|dac',
+            'TIMER': r'TIMER|timer|TIM|tim',
+            'PWM': r'PWM|pwm'
+        }
+
+        for peripheral, pattern in peripheral_patterns.items():
+            if re.search(pattern, source_code):
+                patterns['peripherals'].append(peripheral)
+
+        return patterns
+
+    def _build_embedded_prompt(self, function_name: str, function_info: Dict,
+                              embedded_patterns: Dict) -> str:
+        """
+        Build an enhanced prompt based on detected embedded patterns.
+        """
+
+        base_prompt = f"""
+        Generate comprehensive Unity unit tests for the C function '{function_name}'.
+
+        Function signature: {function_info.get('signature', 'Unknown')}
+        Return type: {function_info.get('return_type', 'Unknown')}
+        Parameters: {function_info.get('parameters', [])}
+
+        This is an embedded systems function with the following characteristics:
+        """
+
+        # Add specific embedded context
+        embedded_features = []
+
+        if embedded_patterns['volatile_registers']:
+            embedded_features.append("- Uses volatile hardware registers")
+            embedded_features.append("- Requires careful memory barrier handling")
+
+        if embedded_patterns['bit_fields']:
+            embedded_features.append("- Implements bit field operations")
+            embedded_features.append("- Requires bit manipulation testing")
+
+        if embedded_patterns['state_machine']:
+            embedded_features.append("- Implements state machine logic")
+            embedded_features.append("- Requires state transition testing")
+
+        if embedded_patterns['safety_critical']:
+            embedded_features.append("- Safety-critical functionality")
+            embedded_features.append("- Requires fault tolerance testing")
+
+        if embedded_patterns['interrupts']:
+            embedded_features.append("- Interrupt service routine")
+            embedded_features.append("- Requires interrupt context testing")
+
+        if embedded_patterns['dma']:
+            embedded_features.append("- DMA transfer operations")
+            embedded_features.append("- Requires data integrity testing")
+
+        if embedded_patterns['memory_mapped']:
+            embedded_features.append("- Memory-mapped I/O operations")
+            embedded_features.append("- Requires address validation testing")
+
+        if embedded_patterns['peripherals']:
+            embedded_features.append(f"- Interacts with peripherals: {', '.join(embedded_patterns['peripherals'])}")
+
+        # Build comprehensive prompt
+        prompt = base_prompt + "\n".join(f"        {feature}" for feature in embedded_features)
+
+        prompt += f"""
+
+        Generate Unity test cases that cover:
+        1. Normal operation scenarios
+        2. Boundary conditions and edge cases
+        3. Error handling and recovery
+        4. Hardware-specific constraints and limitations
+        5. Thread safety and atomic operations (if applicable)
+        6. Performance and timing requirements (if applicable)
+
+        Use proper Unity test macros:
+        - TEST_ASSERT_EQUAL for value comparisons
+        - TEST_ASSERT_TRUE/TEST_ASSERT_FALSE for boolean checks
+        - TEST_ASSERT_NULL/TEST_ASSERT_NOT_NULL for pointer checks
+        - TEST_FAIL_MESSAGE for custom failure messages
+
+        For embedded-specific testing:
+        - Test volatile register access patterns
+        - Verify bit field operations with proper masking
+        - Test state machine transitions comprehensively
+        - Check safety-critical voting mechanisms
+        - Validate interrupt handling sequences
+        - Test DMA transfer completion and error states
+
+        Generate complete, compilable Unity test functions.
+        """
+
+        return prompt
+
+    def _post_process_embedded_tests(self, generated_tests: str,
+                                   embedded_patterns: Dict) -> str:
+        """
+        Post-process generated tests to handle embedded-specific patterns.
+        """
+
+        processed_tests = generated_tests
+
+        # Handle volatile register access patterns
+        if embedded_patterns['volatile_registers']:
+            # Ensure volatile qualifier handling
+            processed_tests = re.sub(
+                r'(\w+)\s*=\s*([^;]+);',
+                r'volatile uint32_t \1 = \2;',
+                processed_tests
+            )
+
+            # Add memory barrier hints for volatile operations
+            processed_tests = re.sub(
+                r'(volatile\s+uint32_t\s+\w+\s*=\s*[^;]+;)',
+                r'\1\n    // Memory barrier for volatile access',
+                processed_tests
+            )
+
+        # Handle bit field operations
+        if embedded_patterns['bit_fields']:
+            # Ensure proper bit field access patterns
+            processed_tests = re.sub(
+                r'(\w+)\.(\w+)\s*=\s*([^;]+);',
+                r'\1.\2 = \3; // Bit field assignment',
+                processed_tests
+            )
+
+            # Add bit field validation
+            processed_tests = re.sub(
+                r'TEST_ASSERT_EQUAL\((\w+)\.(\w+),\s*([^)]+)\);',
+                r'TEST_ASSERT_EQUAL(\1.\2 & ((1 << sizeof(\1.\2) * 8) - 1), \3); // Bit field validation',
+                processed_tests
+            )
+
+        # Handle state machine testing
+        if embedded_patterns['state_machine']:
+            # Ensure state transition testing
+            processed_tests = re.sub(
+                r'(\w*state\w*)\s*=\s*([^;]+);',
+                r'\1 = \2; // State transition',
+                processed_tests
+            )
+
+        # Handle safety-critical patterns
+        if embedded_patterns['safety_critical']:
+            # Add TMR voting validation
+            if 'TMR' in processed_tests or 'voting' in processed_tests.lower():
+                processed_tests = re.sub(
+                    r'TEST_ASSERT_EQUAL\(([^,]+),\s*([^)]+)\);',
+                    r'// TMR voting validation\n    TEST_ASSERT_EQUAL(\1, \2);',
+                    processed_tests
+                )
+
+        return processed_tests
+
+    def _generate_fallback_tests(self, function_name: str, function_info: Dict,
+                               embedded_patterns: Dict) -> str:
+        """
+        Generate fallback tests when AI generation fails.
+        """
+
+        test_template = f"""
+void test_{function_name}_basic_operation(void)
+{{
+    // Basic functionality test
+    // TODO: Implement based on function requirements
+
+    TEST_ASSERT_TRUE(true); // Placeholder assertion
+}}
+
+void test_{function_name}_embedded_constraints(void)
+{{
+    // Embedded-specific constraints test
+"""
+
+        # Add embedded-specific test cases
+        if embedded_patterns['volatile_registers']:
+            test_template += """
+    // Test volatile register access
+    volatile uint32_t test_reg = 0x12345678;
+    TEST_ASSERT_EQUAL(0x12345678, test_reg);
+"""
+
+        if embedded_patterns['bit_fields']:
+            test_template += """
+    // Test bit field operations
+    struct test_bits {
+        uint32_t field1 : 8;
+        uint32_t field2 : 8;
+        uint32_t field3 : 16;
+    } bits = {0};
+    bits.field1 = 255;
+    TEST_ASSERT_EQUAL(255, bits.field1);
+"""
+
+        if embedded_patterns['state_machine']:
+            test_template += """
+    // Test state machine transitions
+    enum {STATE_IDLE, STATE_ACTIVE, STATE_ERROR} state = STATE_IDLE;
+    state = STATE_ACTIVE;
+    TEST_ASSERT_EQUAL(STATE_ACTIVE, state);
+"""
+
+        test_template += """
+    TEST_ASSERT_TRUE(true); // Placeholder assertion
+}
+"""
+
+        return test_template
+
+    def generate_test_suite(self, source_files: List[str], output_dir: str) -> Dict[str, str]:
+        """
+        Generate a complete test suite for multiple source files.
+
+        Args:
+            source_files: List of source file paths
+            output_dir: Directory to save generated tests
+
+        Returns:
+            Dictionary mapping function names to generated test code
+        """
+
+        test_suite = {}
+
+        for source_file in source_files:
+            if not os.path.exists(source_file):
+                continue
+
+            with open(source_file, 'r') as f:
+                source_code = f.read()
+
+            # Analyze the source file
+            analysis = self.analyzer.analyze_file(source_file)
+
+            # Generate tests for each function
+            for function_name, function_info in analysis['functions'].items():
+                try:
+                    test_code = self.generate_embedded_tests(
+                        source_code, function_name, function_info
+                    )
+
+                    # Save individual test file
+                    test_filename = f"test_{function_name}.c"
+                    test_filepath = os.path.join(output_dir, test_filename)
+
+                    with open(test_filepath, 'w') as f:
+                        f.write(test_code)
+
+                    test_suite[function_name] = test_code
+
+                except Exception as e:
+                    print(f"Failed to generate tests for {function_name}: {e}")
+                    continue
+
+        return test_suite

@@ -1,0 +1,2 @@
+# AI C Test Analyzer Requirements
+openpyxl>=3.1.0

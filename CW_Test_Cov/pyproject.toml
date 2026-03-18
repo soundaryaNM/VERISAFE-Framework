@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-c-test-cov"
+version = "0.1.0"
+description = "CW_Test_Cov - Coverage analysis for executed C/C++ unit tests"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "gcovr>=7.2",
+]
+
+[project.scripts]
+ai-c-testcov = "ai_c_test_coverage.cli:main"

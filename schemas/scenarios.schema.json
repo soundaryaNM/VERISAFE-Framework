@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "scenarios",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": "scenarios-1.0" },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scenario_id": { "type": "string" },
+          "function_id": { "type": "string" },
+          "test_type": { "type": "string", "enum": ["BASE", "BOUNDARY", "ERROR_PATH", "MCDC"] },
+          "justification": { "type": "string", "enum": ["COVERAGE_GAP", "SAFETY_CRITICAL", "NEW_FUNCTION", "REGRESSION_AREA"] },
+          "required_inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "role": { "type": "string", "enum": ["INPUT", "DEPENDENCY", "CONFIG"] },
+                "domain": { "type": "string" }
+              },
+              "required": ["name", "role", "domain"],
+              "additionalProperties": false
+            },
+            "minItems": 0
+          },
+          "policy_source": { "type": "string" },
+          "blocking": { "type": "boolean" }
+        },
+        "required": ["scenario_id", "function_id", "test_type", "justification", "required_inputs", "policy_source", "blocking"],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    }
+  },
+  "required": ["schema_version", "scenarios"],
+  "additionalProperties": false
+}

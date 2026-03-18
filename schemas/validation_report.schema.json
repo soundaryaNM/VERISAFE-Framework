@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "validation_report",
+  "type": "object",
+  "properties": {
+    "schema_version": { "const": "validation_report-1.0" },
+    "policy_version": { "type": "string" },
+    "test_file": { "type": "string" },
+    "status": { "type": "string", "enum": ["PASS", "FAIL", "FIX_REQUIRED"] },
+    "failure_class": { "type": "string", "enum": ["STRUCTURAL", "COMPILATION", "LOGIC"] },
+    "blocking": { "type": "boolean" },
+    "policy_compliance": {
+      "type": "object",
+      "properties": {
+        "required_test_types_met": { "type": "boolean" },
+        "missing_test_types": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["required_test_types_met", "missing_test_types"],
+      "additionalProperties": false
+    },
+    "_provenance": {
+      "type": "object",
+      "properties": {
+        "constraints_hash": { "type": "string" },
+        "validator_build": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["schema_version", "policy_version", "test_file", "status", "failure_class", "blocking", "policy_compliance"],
+  "additionalProperties": false
+}

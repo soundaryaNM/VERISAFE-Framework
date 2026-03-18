@@ -1,0 +1,929 @@
+#!/usr/bin/env python3
+"""
+AI Test Runner - Compiles, executes, and provides coverage for AI-generated C++ unit tests
+"""
+
+import os
+import sys
+import argparse
+import shutil
+import subprocess
+from pathlib import Path
+import glob
+import re
+
+# Import DependencyAnalyzer from ai-c-test-generator
+sys.path.append(str(Path(__file__).parent.parent.parent / "ai-c-test-generator"))
+from ai_c_test_generator.analyzer import DependencyAnalyzer
+
+
+class AITestRunner:
+    """AI Test Runner - Builds, executes, and covers AI-generated C and C++ tests"""
+
+    def __init__(self, repo_path: str, output_dir: str = "build", language: str = "auto"):
+        self.repo_path = Path(repo_path).resolve()
+        self.output_dir = self.repo_path / output_dir
+        self.tests_dir = self.repo_path / "tests"
+        self.verification_dir = self.tests_dir / "compilation_report"
+        self.test_reports_dir = self.tests_dir / "test_reports"
+        self.source_dir = self.repo_path / "src"
+        self.language = language  # "c", "cpp", or "auto"
+        self.language = language  # "c", "cpp", or "auto"
+
+        # Initialize dependency analyzer
+        self.analyzer = DependencyAnalyzer(str(self.repo_path))
+
+        # Create output directory
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Create test reports directory
+        self.test_reports_dir.mkdir(parents=True, exist_ok=True)
+
+    def detect_language(self, test_files):
+        """Detect the programming language from test files"""
+        if self.language != "auto":
+            return self.language
+
+        # Check file extensions
+        cpp_extensions = ['.cpp', '.cc', '.cxx', '.c++']
+        c_extensions = ['.c']
+
+        has_cpp = any(any(test_file.name.endswith(ext) for ext in cpp_extensions) for test_file in test_files)
+        has_c = any(any(test_file.name.endswith(ext) for ext in c_extensions) for test_file in test_files)
+
+        if has_cpp and not has_c:
+            return "cpp"
+        elif has_c and not has_cpp:
+            return "c"
+        else:
+            # Mixed or unknown, default to C++
+            return "cpp"
+
+    def get_stubbed_functions_in_test(self, test_file_path: str) -> set:
+        """Detect function stubs in a test file by parsing function definitions"""
+        stubbed_functions = set()
+        try:
+            with open(test_file_path, 'r') as f:
+                content = f.read()
+
+            # Match function definitions like: float raw_to_celsius(int raw) {
+            # Capture the function name (second word), not the return type
+            matches = re.findall(r'\b\w+\s+(\w+)\s*\([^)]*\)\s*{', content)
+            stubbed_functions = set(matches)
+
+            # Remove test functions (they start with "test_")
+            stubbed_functions = {func for func in stubbed_functions if not func.startswith('test_')}
+
+        except Exception as e:
+            print(f"Warning: Could not parse stubs from {test_file_path}: {e}")
+
+        return stubbed_functions
+
+    def find_compilable_tests(self):
+        """Find test files that have compiles_yes in verification reports, or all test files for C++"""
+        compilable_tests = []
+
+        # For C++ tests, if no verification reports exist, use all test files
+        language = self.detect_language([])
+        if language == "cpp" and not self.verification_dir.exists():
+            print("🔍 No verification reports found, using all C++ test files")
+            for ext in ['.cpp', '.cc', '.cxx', '.c++']:
+                test_files = list(self.tests_dir.glob(f"*{ext}"))
+                compilable_tests.extend(test_files)
+                for test_file in test_files:
+                    print(f"✅ Found C++ test: {test_file.name}")
+            return compilable_tests
+
+        if not self.verification_dir.exists():
+            print(f"❌ Verification report directory not found: {self.verification_dir}")
+            return compilable_tests
+
+        # Find all compiles_yes files
+        for report_file in self.verification_dir.glob("*compiles_yes.txt"):
+            # Extract test filename from report filename
+            # Format: test_filename_compiles_yes.txt -> test_filename.c or test_filename.cpp
+            base_name = report_file.stem.replace("_compiles_yes", "")
+
+            # Try both .c and .cpp extensions
+            test_file = None
+            for ext in ['.c', '.cpp', '.cc', '.cxx']:
+                candidate = self.tests_dir / f"{base_name}{ext}"
+                if candidate.exists():
+                    test_file = candidate
+                    break
+
+            if test_file:
+                # Return the full Path object for file operations
+                compilable_tests.append(test_file)
+                print(f"✅ Found compilable test: {test_file.name}")
+            else:
+                print(f"⚠️  Test file not found: {base_name}.c/.cpp")
+
+        return compilable_tests
+
+    def run(self):
+        """Run the complete test execution pipeline"""
+        print("🚀 Starting AI Test Runner...")
+
+        # Find compilable tests
+        test_files = self.find_compilable_tests()
+        if not test_files:
+            print("❌ No compilable tests found")
+            return False
+
+        # Detect language
+        language = self.detect_language(test_files)
+        print(f"🔍 Detected language: {language.upper()}")
+
+        # Setup test framework based on language
+        if language == "cpp":
+            if not self.setup_cpp_framework():
+                print("❌ Failed to setup C++ test framework")
+                return False
+        else:  # C
+            if not self.copy_unity_framework():
+                print("❌ Failed to setup Unity framework")
+                return False
+
+        # Copy source and test files to build directory
+        self.copy_source_files()
+        self.copy_test_files(test_files)
+
+        # Create CMakeLists.txt
+        if not self.create_cmake_lists(test_files, language):
+            print("❌ Failed to create CMakeLists.txt")
+            return False
+
+        # Build tests
+        if not self.build_tests():
+            print("❌ Failed to build tests")
+            return False
+
+        # Run tests
+        test_results = self.run_tests()
+        if not test_results:
+            print("❌ No tests were executed")
+            return False
+
+        # Generate test reports
+        self.generate_test_reports(test_results)
+
+        # Generate coverage (optional)
+        self.generate_coverage()
+
+        # Summary
+        total_suites = len(test_results)
+        total_tests = sum(result.get('total_tests', 1) for result in test_results)
+        passed_tests = sum(result.get('passed_tests', 0) for result in test_results)
+        passed_suites = sum(1 for result in test_results if result['success'])
+
+        print(f"\n📊 Test Summary: {passed_suites}/{total_suites} test suites passed")
+        print(f"📊 Individual Tests: {passed_tests}/{total_tests} tests passed")
+
+        return passed_suites == total_suites
+
+    def copy_unity_framework(self):
+        """Copy or download Unity framework"""
+        unity_dest = self.output_dir / "unity"
+
+        # First try to copy from reference location
+        unity_source = self.repo_path.parent / "ai-test-gemini-CLI" / "unity"
+        if unity_source.exists() and any(unity_source.rglob("*.c")):
+            if unity_dest.exists():
+                try:
+                    shutil.rmtree(unity_dest)
+                except (OSError, PermissionError):
+                    print(f"⚠️  Could not remove existing unity directory: {unity_dest}")
+            shutil.copytree(unity_source, unity_dest)
+            print("✅ Copied Unity framework from reference")
+            return True
+
+        # If not available, download Unity
+        print("📥 Downloading Unity framework...")
+        import urllib.request
+        import zipfile
+        import tempfile
+
+        try:
+            # Download Unity from GitHub
+            unity_url = "https://github.com/ThrowTheSwitch/Unity/archive/refs/heads/master.zip"
+            with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp_zip:
+                temp_zip_path = temp_zip.name
+
+            # Download to the temp file
+            urllib.request.urlretrieve(unity_url, temp_zip_path)
+
+            # Extract Unity
+            with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
+                # Extract only the src directory
+                for member in zip_ref.namelist():
+                    if member.startswith('Unity-master/src/'):
+                        # Remove the Unity-master/src/ prefix
+                        target_path = member.replace('Unity-master/src/', 'src/')
+                        if target_path.endswith('/'):
+                            (unity_dest / target_path).mkdir(parents=True, exist_ok=True)
+                        else:
+                            zip_ref.extract(member, unity_dest.parent / "temp_unity")
+                            source_file = unity_dest.parent / "temp_unity" / member
+                            target_file = unity_dest / target_path
+                            target_file.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(source_file, target_file)
+
+            # Clean up
+            import os
+            os.unlink(temp_zip_path)
+            temp_dir = unity_dest.parent / "temp_unity"
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+
+            print("✅ Downloaded Unity framework")
+            return True
+
+        except Exception as e:
+            print(f"❌ Failed to download Unity: {e}")
+            print("⚠️  Unity framework not available, tests may not compile")
+            return False
+
+    def setup_cpp_framework(self):
+        """Setup C++ test framework (Google Test) and Arduino stubs"""
+        print("📦 Setting up C++ test framework...")
+
+        # Copy Google Test header
+        gtest_dest = self.output_dir / "gtest" / "gtest.h"
+        gtest_dest.parent.mkdir(parents=True, exist_ok=True)
+
+        # Try to copy from reference location first
+        gtest_source = self.repo_path.parent / "Door-Monitoring" / "tests_and_build_single_file" / "gtest" / "gtest.h"
+        if gtest_source.exists():
+            shutil.copy2(gtest_source, gtest_dest)
+            print("✅ Copied Google Test framework from reference")
+        else:
+            # Create minimal Google Test header
+            gtest_content = '''#pragma once
+
+#include <iostream>
+#include <vector>
+#include <string>
+#include <functional>
+
+#define TEST_F(test_fixture, test_name) \\
+    class test_fixture##_##test_name : public test_fixture { \\
+    public: \\
+        test_fixture##_##test_name() {} \\
+        void TestBody(); \\
+    }; \\
+    test_fixture##_##test_name test_fixture##_##test_name##_instance; \\
+    void test_fixture##_##test_name::TestBody()
+
+#define TEST(test_suite, test_name) TEST_F(test_suite, test_name)
+
+#define EXPECT_EQ(a, b) if ((a) != (b)) { std::cout << "FAIL: " << #a << " != " << #b << " (" << (a) << " vs " << (b) << ")" << std::endl; } else { std::cout << "PASS: " << #a << " == " << #b << std::endl; }
+#define EXPECT_TRUE(a) if (!(a)) { std::cout << "FAIL: " << #a << " is not true" << std::endl; } else { std::cout << "PASS: " << #a << " is true" << std::endl; }
+#define EXPECT_FALSE(a) if ((a)) { std::cout << "FAIL: " << #a << " is not false" << std::endl; } else { std::cout << "PASS: " << #a << " is false" << std::endl; }
+
+class TestRegistry {
+public:
+    static TestRegistry& instance() {
+        static TestRegistry reg;
+        return reg;
+    }
+
+    void register_test(const std::string& name, std::function<void()> test) {
+        tests_.push_back({name, test});
+    }
+
+    int run_all_tests() {
+        int passed = 0;
+        for (auto& test : tests_) {
+            std::cout << "Running " << test.name << "..." << std::endl;
+            try {
+                test.func();
+                passed++;
+                std::cout << "PASSED" << std::endl;
+            } catch (...) {
+                std::cout << "FAILED" << std::endl;
+            }
+        }
+        std::cout << passed << "/" << tests_.size() << " tests passed" << std::endl;
+        return passed == tests_.size() ? 0 : 1;
+    }
+
+private:
+    struct TestInfo {
+        std::string name;
+        std::function<void()> func;
+    };
+    std::vector<TestInfo> tests_;
+};
+
+#define REGISTER_TEST(name) TestRegistry::instance().register_test(#name, [](){ name(); });
+
+int RUN_ALL_TESTS() {
+    return TestRegistry::instance().run_all_tests();
+}
+'''
+            with open(gtest_dest, 'w') as f:
+                f.write(gtest_content)
+            print("✅ Created minimal Google Test framework")
+
+        # Copy Arduino stubs
+        arduino_dest = self.output_dir / "arduino_stubs"
+        arduino_dest.mkdir(parents=True, exist_ok=True)
+
+        # Try to copy from reference location
+        arduino_source = self.repo_path.parent / "Door-Monitoring" / "tests_and_build_single_file"
+        stubs_files = ["Arduino_stubs.h", "Arduino_stubs.cpp"]
+        copied = False
+
+        for stub_file in stubs_files:
+            source_file = arduino_source / stub_file
+            if source_file.exists():
+                shutil.copy2(source_file, arduino_dest / stub_file)
+                copied = True
+
+        if copied:
+            print("✅ Copied Arduino stubs from reference")
+        else:
+            # Create minimal Arduino stubs
+            arduino_h_content = '''#pragma once
+
+#include <string>
+#include <iostream>
+#include <chrono>
+#include <thread>
+
+void digitalWrite(int pin, int value);
+int digitalRead(int pin);
+void pinMode(int pin, int mode);
+void delay(int ms);
+unsigned long millis();
+
+class SerialClass {
+public:
+    void begin(int baud);
+    void print(const char* str);
+    void println(const char* str);
+    void print(int val);
+    void println(int val);
+};
+
+extern SerialClass Serial;
+
+class String {
+public:
+    String();
+    String(const char* str);
+    String(int val);
+    String& operator+=(const char* str);
+    String operator+(const char* str) const;
+    const char* c_str() const;
+    int length() const;
+    bool equals(const char* str) const;
+private:
+    std::string data;
+};
+'''
+            arduino_cpp_content = '''#include "Arduino_stubs.h"
+#include <map>
+#include <iostream>
+
+std::map<int, int> pin_states;
+std::map<int, int> pin_modes;
+unsigned long start_time = 0;
+
+void digitalWrite(int pin, int value) {
+    pin_states[pin] = value;
+    std::cout << "digitalWrite(" << pin << ", " << value << ")" << std::endl;
+}
+
+int digitalRead(int pin) {
+    return pin_states[pin];
+}
+
+void pinMode(int pin, int mode) {
+    pin_modes[pin] = mode;
+}
+
+void delay(int ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+unsigned long millis() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count() - start_time;
+}
+
+SerialClass Serial;
+
+void SerialClass::begin(int baud) {
+    std::cout << "Serial.begin(" << baud << ")" << std::endl;
+}
+
+void SerialClass::print(const char* str) {
+    std::cout << str;
+}
+
+void SerialClass::println(const char* str) {
+    std::cout << str << std::endl;
+}
+
+void SerialClass::print(int val) {
+    std::cout << val;
+}
+
+void SerialClass::println(int val) {
+    std::cout << val << std::endl;
+}
+
+String::String() {}
+
+String::String(const char* str) : data(str) {}
+
+String::String(int val) : data(std::to_string(val)) {}
+
+String& String::operator+=(const char* str) {
+    data += str;
+    return *this;
+}
+
+String String::operator+(const char* str) const {
+    String result = *this;
+    result.data += str;
+    return result;
+}
+
+const char* String::c_str() const {
+    return data.c_str();
+}
+
+int String::length() const {
+    return data.length();
+}
+
+bool String::equals(const char* str) const {
+    return data == str;
+}
+'''
+            with open(arduino_dest / "Arduino_stubs.h", 'w') as f:
+                f.write(arduino_h_content)
+            with open(arduino_dest / "Arduino_stubs.cpp", 'w') as f:
+                f.write(arduino_cpp_content)
+            print("✅ Created minimal Arduino stubs")
+
+        return True
+
+    def create_cmake_lists(self, test_files, language="cpp"):
+        if language == "cpp":
+            return self.create_cpp_cmake_lists(test_files)
+        else:
+            return self.create_c_cmake_lists(test_files)
+
+    def create_c_cmake_lists(self, test_files):
+        cmake_content = "cmake_minimum_required(VERSION 3.10)\n"
+        cmake_content += "project(Tests C)\n\n"
+        cmake_content += "set(CMAKE_C_STANDARD 99)\n"
+        cmake_content += "add_definitions(-DUNIT_TEST)\n\n"
+        # Add coverage compilation flags
+        cmake_content += "set(CMAKE_C_FLAGS \"${CMAKE_C_FLAGS} --coverage\")\n"
+        cmake_content += "set(CMAKE_EXE_LINKER_FLAGS \"${CMAKE_EXE_LINKER_FLAGS} --coverage\")\n\n"
+        cmake_content += "include_directories(unity/src)\n"
+        cmake_content += "include_directories(src)\n\n"
+
+        # Add Unity source file
+        cmake_content += "add_library(unity unity/src/unity.c)\n\n"
+
+        source_files = [f for f in os.listdir(self.source_dir) if f.endswith('.c')]
+
+        for test_file in test_files:
+            test_name = os.path.splitext(os.path.basename(test_file))[0]
+            executable_name = test_name
+
+            # Determine the primary source file being tested (e.g., test_test_sample.c -> test_sample.c)
+            # Remove only the first 'test_' prefix
+            if test_name.startswith('test_'):
+                source_under_test = test_name[5:] + '.c'  # Remove 'test_' prefix
+            else:
+                source_under_test = test_name + '.c'
+
+            # For unit testing, only include the specific source file being tested
+            # The test file should contain all necessary stubs for dependencies
+            test_sources = []
+
+            # Include the primary source file if it exists
+            primary_source = os.path.join('src', source_under_test)
+            if os.path.exists(os.path.join(self.source_dir, source_under_test)):
+                test_sources.append(primary_source)
+                print(f"📋 Including source file: {primary_source}")
+            else:
+                print(f"⚠️  Source file not found: {os.path.join(self.source_dir, source_under_test)}")
+
+            # Convert backslashes to forward slashes for CMake compatibility
+            test_sources = [src.replace('\\', '/') for src in test_sources]
+            test_file_basename = os.path.basename(test_file).replace('\\', '/')
+            cmake_content += f"add_executable({executable_name} tests/{test_file_basename} {' '.join(test_sources)})\n"
+            cmake_content += f"target_link_libraries({executable_name} unity)\n\n"
+
+        with open(os.path.join(self.output_dir, 'CMakeLists.txt'), 'w') as f:
+            f.write(cmake_content)
+        print(f"Created CMakeLists.txt with {len(test_files)} test targets")
+        return True
+
+    def create_cpp_cmake_lists(self, test_files):
+        cmake_content = "cmake_minimum_required(VERSION 3.14)\n"
+        cmake_content += "project(cpp_tests CXX)\n\n"
+        cmake_content += "set(CMAKE_CXX_STANDARD 17)\n"
+        cmake_content += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n"
+        cmake_content += "enable_testing()\n\n"
+
+        # Add source files under test
+        source_files = []
+        if self.source_dir.exists():
+            for ext in ['.cpp', '.cc', '.cxx', '.c++']:
+                source_files.extend(self.source_dir.glob(f"*{ext}"))
+
+        if source_files:
+            cmake_content += "# Source code under test\n"
+            cmake_content += "add_library(test_lib OBJECT\n"
+            for src_file in source_files:
+                cmake_content += f"  {src_file.name}\n"
+            cmake_content += ")\n"
+            cmake_content += "target_include_directories(test_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})\n"
+            cmake_content += "target_include_directories(test_lib PUBLIC arduino_stubs)\n"
+            cmake_content += "target_include_directories(test_lib PUBLIC gtest)\n\n"
+
+        # Add test executables
+        for test_file in test_files:
+            test_name = test_file.stem
+            cmake_content += f"# Test executable for {test_name}\n"
+            cmake_content += f"add_executable({test_name}\n"
+            cmake_content += f"  tests/{test_file.name}\n"
+            cmake_content += f"  arduino_stubs/Arduino_stubs.cpp\n"
+            if source_files:
+                cmake_content += f"  $<TARGET_OBJECTS:test_lib>\n"
+            cmake_content += ")\n"
+            cmake_content += f"target_include_directories({test_name} PRIVATE ${{CMAKE_CURRENT_SOURCE_DIR}})\n"
+            cmake_content += f"target_include_directories({test_name} PRIVATE arduino_stubs)\n"
+            cmake_content += f"target_include_directories({test_name} PRIVATE gtest)\n\n"
+            cmake_content += f"add_test(\n"
+            cmake_content += f"  NAME {test_name}\n"
+            cmake_content += f"  COMMAND {test_name}\n"
+            cmake_content += ")\n\n"
+
+        # Write CMakeLists.txt
+        cmake_file = self.output_dir / "CMakeLists.txt"
+        with open(cmake_file, 'w') as f:
+            f.write(cmake_content)
+
+        print("✅ Created CMakeLists.txt for C++ tests")
+        return True
+
+    def copy_test_files(self, test_files):
+        """Copy test files to build directory"""
+        tests_build_dir = self.output_dir / "tests"
+        tests_build_dir.mkdir(exist_ok=True)
+
+        for test_file in test_files:
+            # Read the test file
+            with open(test_file, 'r') as f:
+                content = f.read()
+            
+            # Check if this is a Unity (C) test and add includes for source headers
+            if test_file.name.endswith('.c') and 'unity.h' in content:
+                # Extract source file name from test file name
+                if test_file.name.startswith('test_'):
+                    source_name = test_file.name[5:]  # Remove 'test_' prefix
+                else:
+                    source_name = test_file.name
+                
+                # Add include for the source header if it exists
+                source_header = source_name.replace('.c', '.h')
+                if f'#include "{source_header}"' not in content:
+                    # Insert include after unity.h includes
+                    insert_pos = content.find('#include <stdbool.h>')
+                    if insert_pos != -1:
+                        insert_pos = content.find('\n', insert_pos) + 1
+                        content = content[:insert_pos] + f'#include "{source_header}"\n' + content[insert_pos:]
+            
+            # Write the modified test file
+            dest_file = tests_build_dir / test_file.name
+            with open(dest_file, 'w') as f:
+                f.write(content)
+            print(f"📋 Copied test: {test_file.name}")
+
+    def copy_source_files(self):
+        """Copy source files to build directory and create headers"""
+        src_build_dir = self.output_dir / "src"
+        src_build_dir.mkdir(exist_ok=True)
+
+        if self.source_dir.exists():
+            for src_file in self.source_dir.glob("*.c"):
+                # Read the source file
+                with open(src_file, 'r') as f:
+                    lines = f.readlines()
+                
+                # Remove main function for unit testing
+                filtered_lines = []
+                skip_main = False
+                brace_depth = 0
+                
+                for line in lines:
+                    # Check if this line starts a main function
+                    if 'int main' in line or 'void main' in line:
+                        skip_main = True
+                        brace_depth = 0
+                    
+                    if skip_main:
+                        # Count braces to find the end of main
+                        brace_depth += line.count('{') - line.count('}')
+                        if brace_depth == 0 and '{' in line:
+                            # Found the end of main
+                            skip_main = False
+                    else:
+                        filtered_lines.append(line)
+                
+                # Write the modified source file
+                dest_file = src_build_dir / src_file.name
+                with open(dest_file, 'w') as f:
+                    f.writelines(filtered_lines)
+                print(f"📋 Copied source: {src_file.name}")
+                
+                # Create a corresponding header file with function declarations
+                header_file = src_build_dir / (src_file.stem + ".h")
+                if not header_file.exists():
+                    self._generate_header_from_source(src_file, header_file)
+
+            for header_file in self.source_dir.glob("*.h"):
+                shutil.copy2(header_file, src_build_dir)
+                print(f"📋 Copied header: {header_file.name}")
+        else:
+            print(f"⚠️  Source directory not found: {self.source_dir}")
+
+    def _generate_header_from_source(self, src_file, header_file):
+        """Generate a header file from a source file by extracting function declarations"""
+        try:
+            with open(src_file, 'r') as f:
+                content = f.read()
+            
+            # Extract function declarations (simplified - matches function definitions)
+            # Look for patterns like: bool validate_temperature(float temp)
+            import re
+            # Match: return_type function_name(parameters) {
+            pattern = r'(\w+\s+\w+\s*\([^)]*\))\s*{'
+            matches = re.findall(pattern, content)
+            
+            if matches:
+                with open(header_file, 'w') as f:
+                    f.write(f"/* Auto-generated header for {src_file.name} */\n")
+                    f.write("#pragma once\n\n")
+                    f.write("#include <stdint.h>\n")
+                    f.write("#include <stdbool.h>\n")
+                    f.write("#include <stdio.h>\n")
+                    f.write("#include <stdlib.h>\n\n")
+                    for match in matches:
+                        # Skip main function declaration
+                        if 'main' not in match:
+                            f.write(f"{match};\n")
+                print(f"📋 Generated header: {header_file.name}")
+        except Exception as e:
+            print(f"⚠️  Could not generate header: {e}")
+
+    def build_tests(self):
+        print("🔨 Building tests...")
+
+        # Clean any existing CMake cache
+        cmake_cache = self.output_dir / "CMakeCache.txt"
+        if cmake_cache.exists():
+            cmake_cache.unlink()
+
+        # Configure with CMake
+        try:
+            result = subprocess.run(
+                ["cmake", "."],
+                cwd=self.output_dir,
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                print(f"❌ CMake configure failed: {result.stderr}")
+                print(f"STDOUT: {result.stdout}")
+                return False
+        except FileNotFoundError:
+            print("❌ CMake not found. Please install CMake.")
+            return False
+
+        # Build with CMake
+        try:
+            result = subprocess.run(
+                ["cmake", "--build", "."],
+                cwd=self.output_dir,
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                print(f"❌ Build failed: {result.stderr}")
+                print(f"STDOUT: {result.stdout}")
+                return False
+        except FileNotFoundError:
+            print("❌ Build system not found. Please install Make or Ninja.")
+            return False
+
+        print("✅ Tests built successfully")
+        return True
+
+    def run_tests(self):
+        """Run the compiled test executables"""
+        print("🧪 Running tests...")
+
+        test_results = []
+
+        # Find all test executables
+        for test_exe in self.output_dir.glob("*"):
+            if test_exe.is_file() and (test_exe.suffix == ".exe" or test_exe.name.startswith("test_")):
+                print(f"🚀 Running {test_exe.name}...")
+
+                try:
+                    result = subprocess.run(
+                        [str(test_exe)],
+                        capture_output=True, text=True, cwd=self.output_dir,
+                        timeout=60  # 60 second timeout for more complex tests
+                    )
+
+                    output = result.stdout + result.stderr
+
+                    # Check for Unity test output format (C tests)
+                    if "PASS" in output or "FAIL" in output:
+                        # Parse Unity test output
+                        import re
+                        # Count PASS and FAIL lines - look for format like "filename.c:line:test_name:PASS"
+                        pass_matches = re.findall(r'^[^:]+:\d+:[^:]+:PASS', output, re.MULTILINE)
+                        fail_matches = re.findall(r'^[^:]+:\d+:[^:]+:FAIL', output, re.MULTILINE)
+                        pass_count = len(pass_matches)
+                        fail_count = len(fail_matches)
+                        total_tests = pass_count + fail_count
+                        
+                        success = fail_count == 0 and pass_count > 0
+                        
+                        test_results.append({
+                            'name': test_exe.stem,
+                            'success': success,
+                            'output': output,
+                            'total_tests': total_tests,
+                            'passed_tests': pass_count
+                        })
+                        
+                        if success:
+                            print(f"✅ {test_exe.name}: {pass_count}/{total_tests} tests passed")
+                        else:
+                            print(f"❌ {test_exe.name}: {pass_count}/{total_tests} tests passed, {fail_count} failed")
+                    # Parse Google Test output for C++
+                    elif "tests ran." in output and "PASSED" in output:
+                        # Extract test counts from Google Test output
+                        import re
+                        ran_match = re.search(r'\[==========\]\s+(\d+)\s+tests? ran', output)
+                        passed_match = re.search(r'\[  PASSED  \]\s+(\d+)\s+tests?', output)
+
+                        if ran_match and passed_match:
+                            total_tests = int(ran_match.group(1))
+                            passed_tests = int(passed_match.group(1))
+                            success = result.returncode == 0 and passed_tests == total_tests
+
+                            test_results.append({
+                                'name': test_exe.stem,
+                                'success': success,
+                                'output': output,
+                                'total_tests': total_tests,
+                                'passed_tests': passed_tests
+                            })
+
+                            print(f"✅ {test_exe.name}: {passed_tests}/{total_tests} tests passed")
+                        else:
+                            # Fallback for non-Google Test executables
+                            success = result.returncode == 0
+                            test_results.append({
+                                'name': test_exe.stem,
+                                'success': success,
+                                'output': output,
+                                'total_tests': 1,
+                                'passed_tests': 1 if success else 0
+                            })
+                            print(f"✅ {test_exe.name} passed" if success else f"❌ {test_exe.name} failed")
+                    else:
+                        # For C tests or other frameworks
+                        success = result.returncode == 0
+                        test_results.append({
+                            'name': test_exe.stem,
+                            'success': success,
+                            'output': output,
+                            'total_tests': 1,
+                            'passed_tests': 1 if success else 0
+                        })
+
+                        if success:
+                            print(f"✅ {test_exe.name} passed")
+                        else:
+                            print(f"❌ {test_exe.name} failed")
+                            print(f"Output: {output[:500]}...")
+
+                except subprocess.TimeoutExpired:
+                    print(f"⏰ {test_exe.name} timed out")
+                    test_results.append({
+                        'name': test_exe.stem,
+                        'success': False,
+                        'output': "Test timed out",
+                        'total_tests': 1,
+                        'passed_tests': 0
+                    })
+                except Exception as e:
+                    print(f"❌ Error running {test_exe.name}: {e}")
+                    test_results.append({
+                        'name': test_exe.stem,
+                        'success': False,
+                        'output': str(e),
+                        'total_tests': 1,
+                        'passed_tests': 0
+                    })
+
+        return test_results
+
+    def generate_test_reports(self, test_results):
+        """Generate test execution reports"""
+        print("📋 Generating test reports...")
+
+        # Create test reports directory
+        self.test_reports_dir.mkdir(parents=True, exist_ok=True)
+
+        # Calculate totals
+        total_suites = len(test_results)
+        total_tests = sum(result.get('total_tests', 1) for result in test_results)
+        passed_tests = sum(result.get('passed_tests', 0) for result in test_results)
+        failed_tests = total_tests - passed_tests
+        passed_suites = sum(1 for result in test_results if result['success'])
+
+        # Generate summary report
+        report_file = self.test_reports_dir / "test_summary.txt"
+        with open(report_file, 'w') as f:
+            f.write("AI Test Runner - Test Execution Summary\n")
+            f.write("=" * 50 + "\n\n")
+
+            f.write(f"Test Suites: {total_suites}\n")
+            f.write(f"Individual Tests: {total_tests}\n")
+            f.write(f"Passed Tests: {passed_tests}\n")
+            f.write(f"Failed Tests: {failed_tests}\n")
+            f.write(f"Success Rate: {passed_tests/total_tests*100:.1f}%\n")
+            f.write(f"Passed Suites: {passed_suites}/{total_suites}\n\n")
+
+            f.write("Detailed Results:\n")
+            f.write("-" * 50 + "\n")
+
+            for result in test_results:
+                suite_status = "PASS" if result['success'] else "FAIL"
+                suite_tests = result.get('total_tests', 1)
+                suite_passed = result.get('passed_tests', 0)
+                f.write(f"{result['name']}: {suite_status} ({suite_passed}/{suite_tests} tests)\n")
+                if not result['success'] or suite_passed != suite_tests:
+                    f.write(f"  Output: {result['output'][:300]}...\n")
+                f.write("\n")
+
+        print(f"📄 Test report saved to: {report_file}")
+
+    def generate_coverage(self):
+        """Generate coverage reports (placeholder for future implementation)"""
+        print("📊 Coverage reporting not yet implemented for C++")
+        return True
+
+
+def main():
+    """Main entry point for the AI Test Runner."""
+    parser = argparse.ArgumentParser(
+        description="AI Test Runner - Compiles, executes, and provides coverage for AI-generated C++ unit tests"
+    )
+    parser.add_argument(
+        "repo_path",
+        help="Path to the repository containing tests"
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="build",
+        help="Output directory for build files (default: build)"
+    )
+    parser.add_argument(
+        "--language",
+        choices=["cpp", "auto"],
+        default="auto",
+        help="Programming language (default: auto-detect, C++ only)"
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="%(prog)s 1.0.0"
+    )
+
+    args = parser.parse_args()
+
+    # Create and run the test runner
+    runner = AITestRunner(args.repo_path, args.output_dir, args.language)
+    success = runner.run()
+
+    # Exit with appropriate code
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()
