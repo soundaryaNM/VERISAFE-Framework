@@ -1,76 +1,109 @@
-# UnitTestGen
+**VERISAFE**
 
-A Python tool for generating unit tests automatically.
+VERISAFE is an AI-powered Python framework for automated unit test generation, coverage analysis, and safety-oriented verification workflows for C/C++ projects.
 
-## Installation
+It is designed to accelerate validation in safety-critical environments by enabling rapid onboarding, modular extensibility, and seamless integration with both demo and production codebases.
 
-```bash
-pip install -e .
-```
 
-## Usage
+**Key Features**
 
-# Add usage instructions here
+AI-assisted unit test generation for C/C++ codebases
 
-## RailwaySignalSystem (C++ demo project)
+Code coverage analysis with per-file HTML reports
 
-This repo contains a small C++ project at `RailwaySignalSystem/` that is useful as a demo target for AI-assisted unit test generation.
+Modular architecture designed for multi-agent workflows
 
-### Build and run the simulation
+Demo-ready setup with a sample RailwaySignalSystem project
 
-```powershell
-cmake -S RailwaySignalSystem -B RailwaySignalSystem/build
-cmake --build RailwaySignalSystem/build -j
-RailwaySignalSystem/build/railway_demo.exe
-```
+One-command bootstrap with minimal configuration
 
-### Run unit tests (GoogleTest / gtest)
+Scalable design for integration into validation pipelines
 
-The project is set up to run tests via CTest (`ctest`). Tests are built only when GoogleTest is available.
 
-#### Option A (recommended for client demos): install GoogleTest via vcpkg
+**Architecture Overview**
 
-1) Install vcpkg and integrate it with CMake (one-time on the demo machine).
+VERISAFE is structured into independent modules:
 
-2) Install gtest:
+CW_Test_Analyzer - Project code analysis
 
-```powershell
-vcpkg install gtest
-```
+CW_Test_Gen – Test generation engine
 
-3) Configure using the vcpkg toolchain file (replace the path):
+CW_Test_Cov – Coverage analysis and reporting
 
-```powershell
-cmake -S RailwaySignalSystem -B RailwaySignalSystem/build `
-	-DCMAKE_TOOLCHAIN_FILE=C:/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build RailwaySignalSystem/build -j
-ctest --test-dir RailwaySignalSystem/build --output-on-failure
-```
+CW_Test_Run – Test execution orchestration
 
-#### Option B: provide GoogleTest from a local folder (offline-friendly)
+This modular design enables extensibility and future integration with CI/CD pipelines and automotive validation toolchains.
 
-If the demo environment cannot download dependencies from the internet, install/provide GoogleTest locally and configure CMake so `find_package(GTest)` can locate it by setting one of:
+**Installation**
 
-- `GTest_DIR` (preferred if you have a CMake package)
-- `CMAKE_PREFIX_PATH` (points to the install prefix)
+Clone the repository and set up a virtual environment:
 
-Then run:
+git clone https://github.com/SwathantraPulicherla/VERISAFE.git
+cd VERISAFE
 
-```powershell
-cmake -S RailwaySignalSystem -B RailwaySignalSystem/build -DCMAKE_PREFIX_PATH=C:/path/to/gtest/install
-cmake --build RailwaySignalSystem/build -j
-ctest --test-dir RailwaySignalSystem/build --output-on-failure
-```
+python -m venv .venv
 
-#### Note about corporate SSL
+Activate the environment:
 
-If you enable `-DRAILWAY_FETCH_GTEST=ON`, CMake will try to download googletest from GitHub. Some corporate machines block this (missing CA certs), which will fail the download. For client demos, prefer Option A or B above.
+Windows:
 
-## VERISAFE Harness Architecture
+.\.venv\Scripts\activate
 
-- **Production repository is never modified.** All build and test artifacts are produced under `.verisafe/`.
-- **Overlay harness:** VERISAFE generates a deterministic overlay at `.verisafe/` containing a `CMakeLists.txt`, `generated/` tests, and `extern/` vendored dependencies. The harness is created per-run and is non-invasive.
-- **Deterministic CMake:** The harness CMake is generated deterministically and expects `-DREPO_ROOT=<repo_root>` when configuring; it will glob the production sources under `${REPO_ROOT}/src` and the generated tests under `${CMAKE_CURRENT_SOURCE_DIR}/generated`.
-- **Build isolation:** CMake must always be invoked with `-S <repo>/.verisafe -B <repo>/.verisafe/build -DREPO_ROOT=<repo>` so the repository root is never used as a source directory.
+Linux/macOS:
 
-This makes builds repeatable and prevents accidental changes to the production CMake configuration.
+source .venv/bin/activate
+
+Install dependencies:
+
+pip install --upgrade pip
+pip install -r CW_Test_Cov/requirements.txt -r CW_Test_Gen/requirements.txt -r CW_Test_Run/requirements.txt
+Usage
+
+**Run the interactive demo:**
+
+python run_demo.py --repo-path <path-to-your-cpp-repo>
+
+**Example using the included demo project:**
+
+python run_demo.py --repo-path RailwaySignalSystem
+
+Follow the on-screen menu to generate, review, and execute tests, and to view coverage reports.
+
+**Capabilities**
+
+Automatic unit test generation
+
+Test execution and result analysis
+
+Coverage reporting with HTML outputs
+
+Support for both demo and external C/C++ repositories
+
+**Use Cases**
+
+Validation of safety-critical embedded software
+
+Automotive ECU unit testing workflows
+
+Rapid onboarding for legacy C/C++ codebases
+
+AI-assisted verification pipelines
+
+**Roadmap**
+
+Integration with CI/CD pipelines
+
+Support for automotive validation tools such as CANoe
+
+Enhanced AI-driven test optimization
+
+Extended multi-agent orchestration capabilities
+
+**Contribution**
+
+Contributions are welcome. Please feel free to fork the repository, raise issues, or submit pull requests.
+
+**Author**
+
+Swathantra Pulicherla
+Senior Systems Engineer – Automotive Systems and Embedded Software
