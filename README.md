@@ -35,28 +35,6 @@ CW_Test_Run – Test execution orchestration
 This modular design enables extensibility and future integration with CI/CD pipelines and automotive validation toolchains.
 
 
-Clone the repository and set up a virtual environment:
-
-git clone https://github.com/SwathantraPulicherla/VERISAFE.git
-cd VERISAFE
-
-python -m venv .venv
-
-Activate the environment:
-
-Windows:
-
-.\.venv\Scripts\activate
-
-Linux/macOS:
-
-source .venv/bin/activate
-
-Install dependencies:
-
-pip install --upgrade pip
-pip install -r CW_Test_Cov/requirements.txt -r CW_Test_Gen/requirements.txt -r CW_Test_Run/requirements.txt
-Usage
 **Setup**
 
 Please follow the step-by-step instructions in [SETUP.md](SETUP.md) to set up your environment and required dependencies.
@@ -71,7 +49,7 @@ python run_demo.py --repo-path <path-to-your-cpp-repo>
 
 **Example using the included demo project:**
 
-python run_demo.py --repo-path RailwaySignalSystem
+python run_demo.py --repo-path SampleProjects/RailwaySignalSystem
 
 Follow the on-screen menu to generate, review, and execute tests, and to view coverage reports.
 
