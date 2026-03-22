@@ -375,7 +375,12 @@ _GCOVR_FILE_PATH_RE = re.compile(r"<th scope=\"row\">File:</th>\s*<td>([^<]+)</t
 _GCOVR_DIR_PATH_RE = re.compile(r"<th scope=\"row\">Directory:</th>\s*<td>([^<]+)</td>", re.IGNORECASE)
 
 
-def _materialize_per_file_reports(report_root: Path, *, report_base: str | None = None) -> None:
+def _materialize_per_file_reports(
+    report_root: Path,
+    *,
+    report_base: str | None = None,
+    repo_root: Path | None = None,
+) -> int:
     """Copy gcovr per-file HTML reports into coverage_report/src/... directories.
 
     gcovr --html-details writes hashed files like index.Foo.cpp.<hash>.html in the report root.
@@ -421,7 +426,7 @@ def _materialize_per_file_reports(report_root: Path, *, report_base: str | None 
         fallback_candidates = [report_root / f"{safe_base}_coverage.html", report_root / 'index.html']
         hashed_reports = [p for p in fallback_candidates if p.exists() and p.is_file()]
         if not hashed_reports:
-            return
+            return 0
 
     src_root = report_root / 'src'
     if src_root.exists():
@@ -458,6 +463,17 @@ def _materialize_per_file_reports(report_root: Path, *, report_base: str | None 
                 if candidate.startswith('src/'):
                     rel_path = candidate
         if not rel_path.startswith('src/'):
+            # Handle absolute paths or other layouts by trying to normalize to repo-relative src/.
+            normalized = rel_path.replace('\\', '/')
+            src_idx = normalized.find('/src/')
+            if src_idx != -1:
+                rel_path = normalized[src_idx + 1:]
+            elif repo_root is not None:
+                try:
+                    rel_path = Path(normalized).resolve().relative_to(repo_root.resolve()).as_posix()
+                except Exception:
+                    pass
+        if not rel_path.startswith('src/'):
             continue
 
         dest_dir = (report_root / Path(rel_path)).with_suffix('')
@@ -483,6 +499,8 @@ def _materialize_per_file_reports(report_root: Path, *, report_base: str | None 
 
     if produced:
         print_info(f"Materialized {produced} per-file coverage reports under tests/coverage_report/src")
+
+    return produced
 
 
 def _load_dotenv_if_present(dotenv_path: Path) -> None:
@@ -1971,9 +1989,14 @@ def run_incremental_pipeline_v2(
                     )
                     if cov_out.html_report is not None and cov_out.html_report.exists():
                         # Materialize per-file stable reports for the demo
-                        _materialize_per_file_reports(coverage_root, report_base='railway_coverage')
-                        # Prune the top-level generated summary files; keep only `src/` materialized pages
-                        _prune_coverage_root(coverage_root, 'railway_coverage')
+                        produced = _materialize_per_file_reports(
+                            coverage_root,
+                            report_base='railway_coverage',
+                            repo_root=repo_path,
+                        )
+                        # Only prune summary files when per-file reports were created.
+                        if produced > 0:
+                            _prune_coverage_root(coverage_root, 'railway_coverage')
                         # Normalize CSS filename to a generic one and update HTML references
                         _normalize_coverage_css(coverage_root, 'railway_coverage')
                         hint_path = _coverage_report_hint_path(coverage_root, include_file_for_scope)
@@ -2007,9 +2030,14 @@ def run_incremental_pipeline_v2(
                 if not success:
                     print_error("gcovr coverage generation failed; no coverage available.")
                 else:
-                    _materialize_per_file_reports(coverage_root, report_base='railway_coverage')
-                    # Remove the gcovr summary artifacts we don't want in the coverage root
-                    _prune_coverage_root(coverage_root, 'railway_coverage')
+                    produced = _materialize_per_file_reports(
+                        coverage_root,
+                        report_base='railway_coverage',
+                        repo_root=repo_path,
+                    )
+                    # Remove the gcovr summary artifacts only when per-file reports were created
+                    if produced > 0:
+                        _prune_coverage_root(coverage_root, 'railway_coverage')
                     _normalize_coverage_css(coverage_root, 'railway_coverage')
 
                     hint_path = _coverage_report_hint_path(coverage_root, include_file_for_scope)
