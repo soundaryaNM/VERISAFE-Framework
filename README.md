@@ -34,7 +34,6 @@ CW_Test_Run – Test execution orchestration
 
 This modular design enables extensibility and future integration with CI/CD pipelines and automotive validation toolchains.
 
-**Installation**
 
 Clone the repository and set up a virtual environment:
 
@@ -58,6 +57,13 @@ Install dependencies:
 pip install --upgrade pip
 pip install -r CW_Test_Cov/requirements.txt -r CW_Test_Gen/requirements.txt -r CW_Test_Run/requirements.txt
 Usage
+**Setup**
+
+Please follow the step-by-step instructions in [SETUP.md](SETUP.md) to set up your environment and required dependencies.
+
+---
+
+**Usage**
 
 **Run the interactive demo:**
 
