@@ -236,12 +236,14 @@ def analyze_repo(
         scan_results.setdefault('schema_version', 'repo_scan-1.0')
 
     # Save JSON summary (primary location under repo tests for legacy compatibility)
-    output_file = output_dir / 'analysis.json'
+
+    # Write advanced_analysis.json (full artifact)
+    output_file = output_dir / 'advanced_analysis.json'
     with open(output_file, 'w') as f:
         json.dump(scan_results, f, indent=2)
 
-    # Also write canonical artifact under workspace/work/analysis.json
-    canonical_file = work_dir / 'analysis.json'
+    # Also write canonical artifact under workspace/work/advanced_analysis.json
+    canonical_file = work_dir / 'advanced_analysis.json'
     with open(canonical_file, 'w') as f:
         json.dump(scan_results, f, indent=2)
 
@@ -250,15 +252,13 @@ def analyze_repo(
         import sys
         from pathlib import Path as _Path
 
-        # Ensure workspace root is on sys.path so tools package can be imported
-        workspace_root = _Path(repo_path).resolve().parent
-        if str(workspace_root) not in sys.path:
-            sys.path.insert(0, str(workspace_root))
+        # Ensure tool's workspace root is on sys.path so tools package can be imported
+        tool_root = Path(__file__).resolve().parent.parent.parent
+        if str(tool_root) not in sys.path:
+            sys.path.insert(0, str(tool_root))
 
         from tools.schema.validate import validate_or_halt
 
-        # Load the canonical analysis artifact
-        analysis_payload = json.loads(canonical_file.read_text(encoding='utf-8'))
         # Build a condensed 'repo_scan' artifact that conforms to schemas/repo_scan.schema.json
         repo_scan = {
             'schema_version': 'repo_scan-1.0',
@@ -269,7 +269,7 @@ def analyze_repo(
             'hardware_flags': {},
         }
         # Populate functions
-        fn_index = analysis_payload.get('function_index', {}) if isinstance(analysis_payload, dict) else {}
+        fn_index = scan_results.get('function_index', {}) if isinstance(scan_results, dict) else {}
         import hashlib
         for fid, info in fn_index.items():
             name = info.get('name') or fid
@@ -285,19 +285,19 @@ def analyze_repo(
                 'source_hash': source_hash,
             })
         # Populate call_graph
-        cg = analysis_payload.get('call_graph', {}) if isinstance(analysis_payload, dict) else {}
+        cg = scan_results.get('call_graph', {}) if isinstance(scan_results, dict) else {}
         if isinstance(cg, dict):
             for caller, callees in cg.items():
                 if isinstance(callees, list):
                     for callee in callees:
                         repo_scan['call_graph'].append({'caller_id': caller, 'callee_id': callee})
         # call depths
-        cd = analysis_payload.get('call_depths') or analysis_payload.get('call_depth') or analysis_payload.get('call_depths', {})
+        cd = scan_results.get('call_depths') or scan_results.get('call_depth') or scan_results.get('call_depths', {})
         if isinstance(cd, dict):
             for k, v in cd.items():
                 repo_scan['call_depth'][k] = int(v)
         # hardware flags
-        hf = analysis_payload.get('hardware_flags', {})
+        hf = scan_results.get('hardware_flags', {})
         if isinstance(hf, dict):
             repo_scan['hardware_flags'] = {k: bool(v) for k, v in hf.items()}
 
@@ -305,14 +305,16 @@ def analyze_repo(
         repo_scan_path = work_dir / 'repo_scan.json'
         repo_scan_path.write_text(json.dumps(repo_scan, indent=2), encoding='utf-8')
 
-        schema_path = workspace_root / 'schemas' / 'repo_scan.schema.json'
+        # Use tool's schemas directory
+        tool_root = Path(__file__).resolve().parent.parent.parent
+        schema_path = tool_root / 'schemas' / 'repo_scan.schema.json'
         validate_or_halt(repo_scan, str(schema_path), artifact_name=repo_scan_path.name)
     except SystemExit:
         # propagate exit code from validator
         raise
-    except Exception:
+    except Exception as e:
         # Any unexpected failure writing/validating should halt the pipeline
-        print("[ERROR] Failed to validate repo_scan.json against schema.")
+        print(f"[ERROR] Failed to validate repo_scan.json against schema: {e}")
         sys.exit(1)
     
     # Export to Excel if not disabled

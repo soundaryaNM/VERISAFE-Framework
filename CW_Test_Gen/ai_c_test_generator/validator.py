@@ -115,13 +115,12 @@ class TestValidator:
 
         # V2 section wrapper guard:
         # Generated tests are wrapped in `namespace ai_test_section_<id> { ... }`.
-        # Declaring `namespace railway {}` or `namespace railway::... {}` *inside* that wrapper
-        # accidentally creates `ai_testgen_section_<id>::railway` (not `::railway`) and causes
-        # cascading compile errors and broken type resolution.
+        # Declaring qualified production namespaces *inside* that wrapper can accidentally create
+        # `ai_testgen_section_<id>::<project>::...` instead of `::<project>::...`.
         if is_gtest and ('namespace ai_testgen_section_' in test_content or 'namespace ai_test_section_' in test_content):
-            if re.search(r'\bnamespace\s+railway\b', test_content) or re.search(r'\bnamespace\s+railway::', test_content):
+            if re.search(r'\bnamespace\s+[A-Za-z_][A-Za-z0-9_]*::', test_content):
                 result['issues'].append(
-                    "Do not declare `namespace railway...` inside an ai_testgen_section. Use `::railway::...` qualifications and put fakes in a neutral namespace (e.g., `test_support`)."
+                    "Do not declare qualified production namespaces inside an ai_testgen_section. Use fully-qualified references (`::<project>::...`) and keep fakes in a neutral namespace (e.g., `test_support`)."
                 )
                 result['compiles'] = False
 
@@ -182,28 +181,14 @@ class TestValidator:
 
         # Common C++ hallucinations observed in generated tests.
         if is_gtest:
-            if '::railway::hal::PinMode::OutputOpenDrain' in test_content or '::railway::hal::PinMode::Analog' in test_content:
+            if re.search(r'\bPinMode::OutputOpenDrain\b', test_content) or re.search(r'\bPinMode::Analog\b', test_content):
                 result['issues'].append("Hallucinated PinMode enum values (e.g., OutputOpenDrain/Analog). Use only enum members that exist in the real header.")
                 result['compiles'] = False
 
-            # Common namespace hallucination: Types.h defines Millis in ::railway, not ::railway::logic.
-            if '::railway::logic::Millis' in test_content or 'railway::logic::Millis' in test_content:
-                result['issues'].append("Hallucinated type ::railway::logic::Millis. Use ::railway::Millis (from railway/Types.h).")
-                result['compiles'] = False
-
-            # Common type hallucination: in this repo railway::logic::Decision is a struct (aspect/reason/health), not an enum.
-            if re.search(r'::railway::logic::Decision\s*::', test_content):
-                result['issues'].append("Hallucinated enum-style usage of ::railway::logic::Decision (e.g., Decision::STOP). Decision is a struct; assert on fields like aspect/reason/health.")
-                result['compiles'] = False
-
-            if re.search(r'::railway::logic::\b(?:STOP|WARNING|PROCEED)\b', test_content):
-                result['issues'].append("Hallucinated bare decision identifiers (::railway::logic::STOP/WARNING/PROCEED). Use Decision fields and real enums (Aspect/StopReason/Health).")
-                result['compiles'] = False
-
             # If a fake inherits IGpio, it must implement read(Pin) const.
-            if re.search(r'class\s+\w+\s*:\s*public\s+::railway::hal::IGpio\b', test_content):
+            if re.search(r'class\s+\w+\s*:\s*public\s+(?:::)?[A-Za-z_][A-Za-z0-9_]*::hal::IGpio\b', test_content):
                 # Either implement read(...) const override, or the class remains abstract.
-                if not re.search(r'\bread\s*\(\s*::railway::hal::Pin\b[^\)]*\)\s*const\s+override', test_content):
+                if not re.search(r'\bread\s*\(\s*(?:::)?[A-Za-z_][A-Za-z0-9_]*::hal::Pin\b[^\)]*\)\s*const\s+override', test_content):
                     result['issues'].append("IGpio-derived fake missing required override: PinLevel read(Pin) const.")
                     result['compiles'] = False
 

@@ -192,7 +192,7 @@ class SmartTestGenerator:
 
     Fully qualify all enums, structs, and functions exactly as declared in the included headers
 
-    No unqualified symbols (e.g. StopReason → railway::logic::StopReason)
+    No unqualified symbols (e.g. StopReason → ::project_ns::logic::StopReason)
 
     Single-evaluation rule
 
@@ -246,7 +246,7 @@ class SmartTestGenerator:
     ADDITIONAL NON-NEGOTIABLE REQUIREMENTS
 
     - Remove all markdown fences/backticks (reject if ``` remains anywhere).
-    - Never emit `using namespace`; fully qualify every symbol (e.g., railway::logic::StopReason::None).
+    - Never emit `using namespace`; fully qualify every symbol (e.g., ::project_ns::logic::StopReason::None).
     - Do not invent helper factories such as createInputs(); construct structs inline with real fields.
     - Ensure there is exactly one include block per section (gtest first, then production headers) with no duplicates.
     - Prefer plain TEST macros; only use TEST_F when shared mutable state is required and reset state per test.
@@ -887,6 +887,7 @@ Syntax: Perfect C - complete statements, matching braces, semicolons, no unused 
         # Additional hardening against common C++ hallucinations.
         if self._detect_language(file_path) != 'c':
             test_code = self._sanitize_cpp_interface_hallucinations(test_code)
+            test_code = self._normalize_project_namespace_qualifiers(test_code, analysis.get('includes', []), repo_path=repo_path)
             test_code = self._disable_tests_calling_private_methods(test_code)
 
         # Run post-generation cleanup pass to normalize includes, namespaces, and formatting
@@ -1138,21 +1139,20 @@ Syntax: Perfect C - complete statements, matching braces, semicolons, no unused 
             return test_code
 
         # Common hallucinated enum members (esp. when a model assumes a richer HAL).
-        test_code = test_code.replace("::railway::hal::PinMode::OutputOpenDrain", "::railway::hal::PinMode::OutputPushPull")
-        test_code = test_code.replace("::railway::hal::PinMode::Analog", "::railway::hal::PinMode::Input")
-
-        # Common namespace hallucination: Millis is in ::railway (Types.h), not ::railway::logic.
-        test_code = test_code.replace("::railway::logic::Millis", "::railway::Millis")
-        test_code = test_code.replace("railway::logic::Millis", "::railway::Millis")
-
-        # Fix missing const on IGpio::read overrides (seen frequently).
         test_code = re.sub(
-            r"(::railway::hal::PinLevel\s+read\s*\(\s*::railway::hal::Pin\s+[^\)]*\)\s*)override",
-            r"\1const override",
+            r"((?:::)?[A-Za-z_][A-Za-z0-9_]*::hal::PinMode::)OutputOpenDrain\b",
+            r"\1OutputPushPull",
             test_code,
         )
         test_code = re.sub(
-            r"(railway::hal::PinLevel\s+read\s*\(\s*railway::hal::Pin\s+[^\)]*\)\s*)override",
+            r"((?:::)?[A-Za-z_][A-Za-z0-9_]*::hal::PinMode::)Analog\b",
+            r"\1Input",
+            test_code,
+        )
+
+        # Fix missing const on IGpio::read overrides (seen frequently).
+        test_code = re.sub(
+            r"(((?:::)?[A-Za-z_][A-Za-z0-9_]*::hal::PinLevel\s+read\s*\(\s*(?:::)?[A-Za-z_][A-Za-z0-9_]*::hal::Pin\s+[^\)]*\)\s*))override",
             r"\1const override",
             test_code,
         )
@@ -1160,30 +1160,31 @@ Syntax: Perfect C - complete statements, matching braces, semicolons, no unused 
         # Ensure any IGpio-derived fake implements read(Pin) const.
         # This injects a minimal stub if missing.
         class_re = re.compile(
-            r"(class\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*public\s+::railway::hal::IGpio\s*\{)(?P<body>.*?)(\n\};)",
+            r"(class\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*public\s+(?P<ns>(?:::)?[A-Za-z_][A-Za-z0-9_]*)::hal::IGpio\s*\{)(?P<body>.*?)(\n\};)",
             re.DOTALL,
         )
 
         def _inject_read(m: re.Match) -> str:
             head = m.group(1)
+            ns = m.group("ns")
             body = m.group("body")
             tail = m.group(3)
             if re.search(r"\bread\s*\(", body):
                 return m.group(0)
             injection = (
-                "\n    ::railway::hal::PinLevel read(::railway::hal::Pin /*pin*/) const override {\n"
-                "        return ::railway::hal::PinLevel::Low;\n"
+                f"\n    {ns}::hal::PinLevel read({ns}::hal::Pin /*pin*/) const override {{\n"
+                f"        return {ns}::hal::PinLevel::Low;\n"
                 "    }\n"
             )
             return head + body + injection + tail
 
         test_code = class_re.sub(_inject_read, test_code)
 
-        # ControllerLogic common hallucination: treat ::railway::logic::Decision as an enum.
-        # In this repo, Decision is a struct (aspect/reason/health). Rewrite enum-style EXPECT_EQ
-        # into an aspect assertion that compiles and still checks safety behavior.
+        # Common hallucination: treat evaluateControllerLogic(...) return value as an enum.
+        # Rewrite enum-style EXPECT_EQ into an aspect assertion that compiles and still
+        # checks safety behavior, without hardcoding a project namespace.
         call_re = re.compile(
-            r"(?P<indent>^\s*)(?P<macro>(?:EXPECT|ASSERT)_EQ)\s*\(\s*::railway::logic::evaluateControllerLogic\s*\((?P<args>.*?)\)\s*,\s*(?P<expected>[^\)]+)\)\s*;\s*$",
+            r"(?P<indent>^\s*)(?P<macro>(?:EXPECT|ASSERT)_EQ)\s*\(\s*(?P<ns>(?:::)?[A-Za-z_][A-Za-z0-9_]*)::logic::evaluateControllerLogic\s*\((?P<args>.*?)\)\s*,\s*(?P<expected>[^\)]+)\)\s*;\s*$",
             re.DOTALL | re.MULTILINE,
         )
 
@@ -1204,14 +1205,159 @@ Syntax: Perfect C - complete statements, matching braces, semicolons, no unused 
 
             counter += 1
             indent = m.group("indent")
+            ns = m.group("ns")
             args = m.group("args").strip()
             out_name = f"out_{counter}"
             return (
-                f"{indent}const auto {out_name} = ::railway::logic::evaluateControllerLogic({args});\n"
-                f"{indent}EXPECT_EQ({out_name}.aspect, ::railway::drivers::Aspect::{aspect});"
+                f"{indent}const auto {out_name} = {ns}::logic::evaluateControllerLogic({args});\n"
+                f"{indent}EXPECT_EQ({out_name}.aspect, {ns}::drivers::Aspect::{aspect});"
             )
 
         test_code = call_re.sub(_rewrite_controllerlogic_expect, test_code)
+        return test_code
+
+    @staticmethod
+    def _normalize_project_namespace_qualifiers(
+        test_code: str,
+        source_includes: list[str] | None = None,
+        repo_path: str | None = None,
+    ) -> str:
+        """Normalize hallucinated root namespaces using include-path hints.
+
+        If includes clearly indicate a single root namespace (e.g., doors/... or railway/...)
+        rewrite mismatched qualifiers like ::other::logic::X to ::<root>::logic::X.
+        When possible, detect nested namespaces from headers (e.g., root::logic) and
+        correct symbols that were emitted as ::root::Symbol.
+        """
+
+        if not test_code:
+            return test_code
+
+        roots: list[str] = []
+        include_pattern = re.compile(r"#include\s+[\"<]([A-Za-z_][A-Za-z0-9_]*)/")
+        include_path_pattern = re.compile(r"#include\s+[\"<]([^\">]+)[\">]")
+        include_paths: list[str] = []
+
+        for m in include_pattern.finditer(test_code):
+            roots.append(m.group(1))
+
+        for m in include_path_pattern.finditer(test_code):
+            include_paths.append(m.group(1).strip())
+
+        for inc in (source_includes or []):
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)/", str(inc).strip())
+            if m:
+                roots.append(m.group(1))
+                include_paths.append(str(inc).strip())
+
+        ignored = {
+            "gtest", "gmock", "googletest", "googlemock", "std", "cstddef", "cstdint", "stdint", "stddef"
+        }
+        roots = [r for r in roots if r not in ignored]
+        if not roots:
+            return test_code
+
+        freq: dict[str, int] = {}
+        for root in roots:
+            freq[root] = freq.get(root, 0) + 1
+
+        preferred = max(freq.items(), key=lambda item: item[1])[0]
+
+        ns_re = re.compile(r"(?<![A-Za-z0-9_])(?:::)?(?P<root>[A-Za-z_][A-Za-z0-9_]*)::(?=(logic|hal|drivers|app|platform)\b)")
+        observed = {m.group("root") for m in ns_re.finditer(test_code)}
+        for root in observed:
+            if root == preferred:
+                continue
+            test_code = re.sub(
+                rf"(?<![A-Za-z0-9_])(?:::)?{re.escape(root)}::(?=(logic|hal|drivers|app|platform)\b)",
+                f"::{preferred}::",
+                test_code,
+            )
+
+        if repo_path and include_paths:
+            repo_root = Path(repo_path).resolve()
+
+            def _resolve_include(include_path: str) -> Path | None:
+                candidates = [
+                    repo_root / include_path,
+                    repo_root / "include" / include_path,
+                    repo_root / "src" / include_path,
+                ]
+                for candidate in candidates:
+                    if candidate.is_file():
+                        return candidate
+                return None
+
+            def _extract_namespace_symbols(header_text: str, namespace_qualifier: str) -> set[str]:
+                symbols: set[str] = set()
+                in_namespace = False
+                pending_open = False
+                depth = 0
+                ns_re = re.compile(rf"\bnamespace\s+{re.escape(namespace_qualifier)}\b")
+
+                def _collect(line: str) -> None:
+                    for pattern in (
+                        r"\benum\s+class\s+([A-Za-z_][A-Za-z0-9_]*)",
+                        r"\benum\s+([A-Za-z_][A-Za-z0-9_]*)",
+                        r"\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)",
+                        r"\bclass\s+([A-Za-z_][A-Za-z0-9_]*)",
+                        r"\busing\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+                        r"\btypedef\b[^;]*\b([A-Za-z_][A-Za-z0-9_]*)\s*;",
+                        r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*;",
+                    ):
+                        m = re.search(pattern, line)
+                        if m:
+                            symbols.add(m.group(1))
+
+                for line in header_text.splitlines():
+                    if not in_namespace:
+                        if ns_re.search(line):
+                            if "{" in line:
+                                in_namespace = True
+                                depth = line.count("{") - line.count("}")
+                            else:
+                                in_namespace = True
+                                pending_open = True
+                            continue
+
+                    if pending_open:
+                        if "{" in line:
+                            pending_open = False
+                            depth = line.count("{") - line.count("}")
+                        continue
+
+                    if in_namespace and depth > 0:
+                        _collect(line)
+                        depth += line.count("{") - line.count("}")
+                        if depth <= 0:
+                            in_namespace = False
+                            pending_open = False
+
+                return symbols
+
+            symbols: set[str] = set()
+            include_re = re.compile(rf"^{re.escape(preferred)}/logic/.*")
+
+            for inc in include_paths:
+                inc = str(inc).strip()
+                if not include_re.match(inc):
+                    continue
+                header_path = _resolve_include(inc)
+                if not header_path:
+                    continue
+                try:
+                    header_text = header_path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                symbols.update(_extract_namespace_symbols(header_text, f"{preferred}::logic"))
+
+            if symbols:
+                for sym in sorted(symbols):
+                    pattern = re.compile(
+                        rf"(?<![A-Za-z0-9_])(?P<prefix>(?:::)?){re.escape(preferred)}::(?!logic::){re.escape(sym)}\b"
+                    )
+                    test_code = pattern.sub(lambda m: f"{m.group('prefix')}{preferred}::logic::{sym}", test_code)
+
         return test_code
 
     @staticmethod
@@ -1490,10 +1636,10 @@ Syntax: Perfect C - complete statements, matching braces, semicolons, no unused 
 
     @staticmethod
     def _sanitize_railway_igpio_fake(test_code: str) -> str:
-        """Best-effort fixups for railway::hal::IGpio fakes.
+        """Best-effort fixups for `<project>::hal::IGpio` fake implementations.
 
         Ensures common FakeGpio implementations match the real interface:
-        - Pin type is railway::hal::Pin
+        - Pin type is `<project>::hal::Pin`
         - read(Pin) is const
         - write(Pin, PinLevel) exists (some models omit it)
         """
@@ -1501,65 +1647,70 @@ Syntax: Perfect C - complete statements, matching braces, semicolons, no unused 
         if not test_code:
             return test_code
 
-        if "railway/hal/IGpio.h" not in test_code:
+        if not re.search(r'"[A-Za-z_][A-Za-z0-9_]*/hal/IGpio\.h"', test_code):
             return test_code
-        if "class FakeGpio" not in test_code or "railway::hal::IGpio" not in test_code:
+        if "class FakeGpio" not in test_code:
             return test_code
+
+        ns_match = re.search(r'class\s+FakeGpio\s*:\s*public\s+(?P<ns>(?:::)?[A-Za-z_][A-Za-z0-9_]*)::hal::IGpio\b', test_code)
+        if not ns_match:
+            return test_code
+        ns = ns_match.group('ns').lstrip(':')
 
         # Function signatures (some models guess uint8_t/uint16_t/int for pins).
         pin_guess = r"(?:(?:std::)?u?int(?:8|16|32)_t|unsigned\s+char|unsigned\s+short|unsigned\s+int|int|short|char)"
 
         test_code = re.sub(
-            rf"\bvoid\s+configure\s*\(\s*{pin_guess}\s+pin\s*,\s*(?:::)?railway::hal::PinMode\s+mode\s*\)\s*override",
-            "void configure(railway::hal::Pin pin, railway::hal::PinMode mode) override",
+            rf"\bvoid\s+configure\s*\(\s*{pin_guess}\s+pin\s*,\s*(?:::)?{re.escape(ns)}::hal::PinMode\s+mode\s*\)\s*override",
+            f"void configure({ns}::hal::Pin pin, {ns}::hal::PinMode mode) override",
             test_code,
         )
 
         # read(): ensure Pin type and const override.
         test_code = re.sub(
-            rf"\b(?:::)?railway::hal::PinLevel\s+read\s*\(\s*{pin_guess}\s+pin\s*\)\s*(?:const\s*)?override",
-            "railway::hal::PinLevel read(railway::hal::Pin pin) const override",
+            rf"\b(?:::)?{re.escape(ns)}::hal::PinLevel\s+read\s*\(\s*{pin_guess}\s+pin\s*\)\s*(?:const\s*)?override",
+            f"{ns}::hal::PinLevel read({ns}::hal::Pin pin) const override",
             test_code,
         )
         test_code = re.sub(
-            r"\b(?:::)?railway::hal::PinLevel\s+read\s*\(\s*(?:::)?railway::hal::Pin\s+pin\s*\)\s*override",
-            "railway::hal::PinLevel read(railway::hal::Pin pin) const override",
+            rf"\b(?:::)?{re.escape(ns)}::hal::PinLevel\s+read\s*\(\s*(?:::)?{re.escape(ns)}::hal::Pin\s+pin\s*\)\s*override",
+            f"{ns}::hal::PinLevel read({ns}::hal::Pin pin) const override",
             test_code,
         )
 
         # write(): ensure Pin type when present.
         test_code = re.sub(
-            rf"\bvoid\s+write\s*\(\s*{pin_guess}\s+pin\s*,\s*(?:::)?railway::hal::PinLevel\s+level\s*\)\s*override",
-            "void write(railway::hal::Pin pin, railway::hal::PinLevel level) override",
+            rf"\bvoid\s+write\s*\(\s*{pin_guess}\s+pin\s*,\s*(?:::)?{re.escape(ns)}::hal::PinLevel\s+level\s*\)\s*override",
+            f"void write({ns}::hal::Pin pin, {ns}::hal::PinLevel level) override",
             test_code,
         )
 
         # Member declarations (common names)
         test_code = re.sub(
             r"\buint8_t\s+configuredPin_\b",
-            "railway::hal::Pin configuredPin_",
+            f"{ns}::hal::Pin configuredPin_",
             test_code,
         )
         test_code = re.sub(
             r"\buint8_t\s+lastWritePin_\b",
-            "railway::hal::Pin lastWritePin_",
+            f"{ns}::hal::Pin lastWritePin_",
             test_code,
         )
         # When read() is const, lastReadPin_ must be mutable if we track it.
         test_code = re.sub(
             r"\buint8_t\s+lastReadPin_\b",
-            "mutable railway::hal::Pin lastReadPin_",
+            f"mutable {ns}::hal::Pin lastReadPin_",
             test_code,
         )
         test_code = re.sub(
-            r"\brailway::hal::Pin\s+lastReadPin_\b",
-            "mutable railway::hal::Pin lastReadPin_",
+            rf"\b{re.escape(ns)}::hal::Pin\s+lastReadPin_\b",
+            f"mutable {ns}::hal::Pin lastReadPin_",
             test_code,
         )
 
         # Some models omit the write() override entirely; add a minimal stub so the fake compiles.
         class_pattern = re.compile(
-            r"(class\s+FakeGpio\s*:\s*public\s+(?:::)?railway::hal::IGpio\s*\{)(?P<body>.*?)(^\s*\};)",
+            rf"(class\s+FakeGpio\s*:\s*public\s+(?:::)?{re.escape(ns)}::hal::IGpio\s*\{{)(?P<body>.*?)(^\s*\}};)",
             flags=re.DOTALL | re.MULTILINE,
         )
 
@@ -1574,12 +1725,12 @@ Syntax: Perfect C - complete statements, matching braces, semicolons, no unused 
             if im:
                 indent = im.group("ws")
             else:
-                im = re.search(r"\n(?P<ws>\s+)(?:::)?railway::hal::PinLevel\s+read\b", body)
+                im = re.search(rf"\n(?P<ws>\s+)(?:::)?{re.escape(ns)}::hal::PinLevel\s+read\b", body)
                 if im:
                     indent = im.group("ws")
 
             insertion = (
-                f"\n{indent}void write(railway::hal::Pin pin, railway::hal::PinLevel level) override "
+                f"\n{indent}void write({ns}::hal::Pin pin, {ns}::hal::PinLevel level) override "
                 f"{{ (void)pin; (void)level; }}\n"
             )
             return m.group(1) + body + insertion + m.group(3)
@@ -1695,8 +1846,8 @@ OUTPUT RULES:
 - Keep all tests scoped to the target function.
 - Do not reference any other production function unless it is explicitly listed above.
 - No markdown fences/backticks.
-- Do NOT invent helper factories (e.g., createInputs); construct `::railway::logic::Inputs` inline.
-- Never use `using namespace`; fully qualify every symbol (e.g., ::railway::logic::StopReason::None).
+- Do NOT invent helper factories (e.g., createInputs); construct input structs inline using real project types.
+- Never use `using namespace`; fully qualify every symbol (e.g., ::project_ns::logic::StopReason::None).
 - Exactly one include block per test section (<gtest/gtest.h> first, then production headers).
 - Use `TEST` by default; only use fixtures if shared mutable state is mandatory and reset inputs each test.
 - Call the production function exactly once per test, store the result, then assert on its fields.
@@ -1829,6 +1980,7 @@ OUTPUT RULES:
 
             if self._detect_language(file_path) != 'c':
                 test_code = self._sanitize_cpp_interface_hallucinations(test_code)
+                test_code = self._normalize_project_namespace_qualifiers(test_code, analysis.get('includes', []))
                 test_code = self._disable_tests_calling_private_methods(test_code)
 
             if self._detect_language(file_path) == 'c':
@@ -2136,11 +2288,11 @@ C++ IS STATIC. These are FORBIDDEN:
 
 If you violate any of these, the output is INVALID.
 
-❌ Defining `namespace railway` / `namespace railway::...` blocks in the test output
-   (our harness wraps each generated section in a namespace; declaring `namespace railway::...` inside it
-    creates a shadow namespace like `ai_testgen_section_xxx::railway::...` and breaks compilation).
-✅ Always refer to production types via fully-qualified names like `::railway::...`.
-✅ Put fakes/stubs in a local namespace like `test_doubles` (NOT under `railway`).
+❌ Defining production namespaces (e.g., `namespace <project>::...`) in the test output
+   (our harness wraps each generated section in a namespace; declaring production namespaces inside it
+    can create shadow namespaces like `ai_testgen_section_xxx::<project>::...` and break compilation).
+✅ Always refer to production types via fully-qualified names like `::<project>::...`.
+✅ Put fakes/stubs in a local namespace like `test_doubles` (NOT under production namespaces).
 
 ========================
 HARDWARE BOUNDARY RULES
@@ -2275,7 +2427,7 @@ ADDITIONAL CLEANUP REQUIREMENTS (MANDATORY)
 
 - Reject markdown fences/backticks: if ``` appears anywhere, stop.
 - Do NOT invent helper factories (e.g., createInputs); build structs inline using real fields from analyzer output.
-- NEVER use `using namespace`; fully qualify every symbol (e.g., ::railway::logic::StopReason::None).
+- NEVER use `using namespace`; fully qualify every symbol (e.g., ::project_ns::logic::StopReason::None).
 - Emit exactly one include block per section (<gtest/gtest.h> first, then production headers) with no duplicates or reorderings.
 - Default to `TEST`; only use fixtures when shared mutable state is unavoidable, and reset inputs in every test.
 - Each test must call the production function exactly once, store the result in a local variable, and assert on its fields (single-evaluation rule).
@@ -2722,17 +2874,18 @@ Generate ONLY the complete test_{source_name}.c C code now. Follow EVERY rule st
 
     @staticmethod
     def _sanitize_shadowed_railway_namespaces(test_code: str) -> str:
-        """Prevent a hard-to-debug namespace shadowing bug in sectioned tests.
+        """Prevent namespace shadowing bugs in sectioned tests.
 
         The approvals harness wraps each generated section in its own namespace
         (e.g., `namespace ai_testgen_section_deadbeef { ... }`). If the model
-        emits `namespace railway::hal { ... }` inside that, it creates a nested
-        namespace `ai_testgen_section_deadbeef::railway::hal`, so unqualified
-        repo symbols (IGpio/Pin/TrackCircuitInput/Millis, etc.) stop resolving.
+        emits `namespace <project>::hal { ... }` inside that, it creates a nested
+        namespace `ai_testgen_section_deadbeef::<project>::hal`, so unqualified
+        repo symbols can stop resolving.
 
-        This sanitizer rewrites the common patterns into safe local namespaces:
-        - `namespace railway::hal {`  -> `namespace test_doubles { using namespace ::railway::hal;`
-        - `namespace railway::drivers {` -> `namespace { using namespace ::railway::drivers;`
+        This sanitizer rewrites common nested production-namespace patterns into
+        safe local namespaces:
+        - `namespace <project>::hal {`  -> `namespace test_doubles { using namespace ::<project>::hal;`
+        - `namespace <project>::drivers {` -> `namespace { using namespace ::<project>::drivers;`
 
         It also rewrites common fake type qualifiers so the tests keep compiling.
         """
@@ -2742,48 +2895,38 @@ Generate ONLY the complete test_{source_name}.c C code now. Follow EVERY rule st
 
         updated = test_code
 
-        # Replace nested railway::hal block with a local test doubles namespace.
+        # Replace nested <root>::hal block with a local test doubles namespace.
         updated = re.sub(
-            r"(?m)^\s*namespace\s+railway::hal\s*\{\s*$",
-            "namespace test_doubles {\nusing namespace ::railway::hal;",
+            r"(?m)^\s*namespace\s+(?P<root>[A-Za-z_][A-Za-z0-9_]*)::hal\s*\{\s*$",
+            lambda m: f"namespace test_doubles {{\nusing namespace ::{m.group('root')}::hal;",
             updated,
         )
         updated = re.sub(
-            r"(?m)^\s*\}\s*//\s*namespace\s+railway::hal\s*$",
-            "} // namespace test_doubles",
-            updated,
-        )
-        updated = re.sub(
-            r"(?m)^\s*\}\s*//\s*namespace\s+railway\s*::\s*hal\s*$",
+            r"(?m)^\s*\}\s*//\s*namespace\s+[A-Za-z_][A-Za-z0-9_]*\s*::\s*hal\s*$",
             "} // namespace test_doubles",
             updated,
         )
 
-        # Replace nested railway::drivers block with an anonymous namespace + using-directive.
+        # Replace nested <root>::drivers block with an anonymous namespace + using-directive.
         updated = re.sub(
-            r"(?m)^\s*namespace\s+railway::drivers\s*\{\s*$",
-            "namespace {\nusing namespace ::railway::drivers;",
+            r"(?m)^\s*namespace\s+(?P<root>[A-Za-z_][A-Za-z0-9_]*)::drivers\s*\{\s*$",
+            lambda m: f"namespace {{\nusing namespace ::{m.group('root')}::drivers;",
             updated,
         )
         updated = re.sub(
-            r"(?m)^\s*\}\s*//\s*namespace\s+railway::drivers\s*$",
-            "} // namespace",
-            updated,
-        )
-        updated = re.sub(
-            r"(?m)^\s*\}\s*//\s*namespace\s+railway\s*::\s*drivers\s*$",
+            r"(?m)^\s*\}\s*//\s*namespace\s+[A-Za-z_][A-Za-z0-9_]*\s*::\s*drivers\s*$",
             "} // namespace",
             updated,
         )
 
-        # If the model referenced the fake by the old qualifier, fix it.
+        # If the model referenced fakes by old qualified names, rewrite them.
         updated = re.sub(
-            r"(?<![A-Za-z0-9_])(?:::)?railway::hal::FakeGpio\b",
+            r"(?<![A-Za-z0-9_])(?:::)?[A-Za-z_][A-Za-z0-9_]*::hal::FakeGpio\b",
             "test_doubles::FakeGpio",
             updated,
         )
         updated = re.sub(
-            r"(?<![A-Za-z0-9_])(?:::)?railway::hal::MockGpio\b",
+            r"(?<![A-Za-z0-9_])(?:::)?[A-Za-z_][A-Za-z0-9_]*::hal::MockGpio\b",
             "test_doubles::MockGpio",
             updated,
         )

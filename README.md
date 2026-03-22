@@ -1,4 +1,4 @@
-**VERISAFE**
+*VERISAFE**
 
 VERISAFE is an AI-powered Python framework for automated unit test generation, coverage analysis, and safety-oriented verification workflows for C/C++ projects.
 
