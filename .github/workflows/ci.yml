@@ -1,4 +1,3 @@
-# VERISAFE CI Pipeline — triggers on every push
 name: VERISAFE CI Pipeline
 
 on:
@@ -12,4 +11,25 @@ env:
   SAFETY_LEVEL: "SIL0"
 
 jobs:
-  # ... (full content is in the ci.yml file provided)
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Build
+        run: echo "Build step placeholder"
+
+      - name: Run tests
+        run: echo "Test step placeholder"
