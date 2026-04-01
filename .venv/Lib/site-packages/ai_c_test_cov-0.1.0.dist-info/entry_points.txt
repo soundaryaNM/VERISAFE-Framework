@@ -1,0 +1,2 @@
+[console_scripts]
+ai-c-testcov = ai_c_test_coverage.cli:main

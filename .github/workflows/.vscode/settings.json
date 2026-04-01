@@ -1,0 +1,17 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "python.terminal.activateEnvironment": true,
+  "editor.formatOnSave": true,
+  "terminal.integrated.env.windows": {
+    "PYTHONUTF8": "1",
+    "PYTHONIOENCODING": "utf-8"
+  },
+  "cmake.configureOnOpen": false,
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.default.includePath": [
+    "${workspaceFolder}/SampleProjects/RailwaySignalSystem/include/**",
+    "${workspaceFolder}/SampleProjects/RailwaySignalSystem/src/**",
+    "${workspaceFolder}/CW_Test_Run/gtest",
+    "${workspaceFolder}/tools/third_party/googletest/googletest/include"
+  ]
+}

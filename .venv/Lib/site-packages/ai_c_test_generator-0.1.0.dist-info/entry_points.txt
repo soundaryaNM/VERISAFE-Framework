@@ -1,0 +1,2 @@
+[console_scripts]
+ai-c-testgen = ai_c_test_generator.cli:main

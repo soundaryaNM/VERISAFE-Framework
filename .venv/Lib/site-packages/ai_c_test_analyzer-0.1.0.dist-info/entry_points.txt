@@ -1,0 +1,2 @@
+[console_scripts]
+ai-c-test-analyzer = ai_c_test_analyzer.cli:main

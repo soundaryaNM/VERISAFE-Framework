@@ -30,7 +30,7 @@ This will:
 3. In your terminal, set the environment variable (replace `your-key-here`):
 
 ```
-set GEMINI_API_KEY=your-key-here
+set GEMINI_API_KEY=AIzaSyCG6oE9-Vsl8GVCVg28W3lFX6epMn5U8G8
 ```
 
 To verify, run:

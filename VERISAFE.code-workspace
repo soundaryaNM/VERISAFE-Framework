@@ -1,0 +1,19 @@
+{
+  "folders": [
+    { "name": "VERISAFE Framework", "path": "." },
+    { "name": "BSW Repo (RailwaySignalSystem)",
+      "path": "./SampleProjects/RailwaySignalSystem" }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "terminal.integrated.env.windows": {
+      "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python", "ms-vscode.cpptools",
+      "ms-vscode.cmake-tools", "github.vscode-github-actions"
+    ]
+  }
+}

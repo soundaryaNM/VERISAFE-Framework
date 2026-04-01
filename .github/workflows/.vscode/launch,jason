@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run VERISAFE Demo (Railway)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_demo.py",
+      "args": ["--repo-path", "SampleProjects/RailwaySignalSystem"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONUTF8": "1" }
+    },
+    {
+      "name": "Run Analysis Only",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_demo.py",
+      "args": ["--repo-path", "SampleProjects/RailwaySignalSystem",
+               "--only-analysis"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONUTF8": "1" }
+    }
+  ]
+}
